@@ -98,6 +98,8 @@ class FeatureIngest:
         self._texts: Dict[str, Optional[str]] = {}
         self._symbols: Dict[str, List[symbols.Symbol]] = {}
         self._stored_blobs: Set[str] = set()
+        self.incidental: List[str] = []
+        self.head_rev: Optional[str] = None
 
     # --- locating code ---------------------------------------------------------
 
@@ -286,6 +288,7 @@ class FeatureIngest:
         anchors = self._resolve_anchors(feature, eff_base)
         brief_meta = (feature.get("brief") or {}).get("meta", {})
         incidental = brief_meta.get("incidental", [])
+        self.incidental = incidental
         rule_set = rules.load(self.project_dir)
         tests_by_target = self._tests_by_target(feature)
 
@@ -703,11 +706,11 @@ class FeatureIngest:
             if not fp.binary:
                 self.store_blob(fp.old_blob)
                 self.store_blob(fp.new_blob)
-            hit = self._commit_file_systems(fp, anchors)
+            hit, hunk_rows = self._commit_file_systems(fp, anchors)
             systems_hit.update(hit)
             file_rows.append({"path": fp.path, "old_path": fp.old_path, "status": fp.status, "binary": fp.binary,
                               "additions": fp.additions, "deletions": fp.deletions, "systems": sorted(hit),
-                              "old_blob": fp.old_blob, "new_blob": fp.new_blob})
+                              "old_blob": fp.old_blob, "new_blob": fp.new_blob, "hunks": hunk_rows})
         subject = meta.get("subject") or ""
         body = meta.get("body") or ""
         thin = kind == "agent" and (not body.strip() or len(subject) > 72)
@@ -740,28 +743,53 @@ class FeatureIngest:
             "body": body, "files": [{"path": r["path"], "status": r["status"], "additions": r["additions"],
                                      "deletions": r["deletions"]} for r in file_rows]}
 
-    def _commit_file_systems(self, fp: diffparse.FilePatch, anchors: List[dict]) -> Set[str]:
-        """Systems whose head anchors overlap this commit's hunks, mapped to head lines."""
+    def _commit_file_systems(self, fp: diffparse.FilePatch, anchors: List[dict]) -> Tuple[Set[str], List[dict]]:
+        """Systems whose head anchors overlap this commit's hunks, mapped to head lines.
+
+        Returns the systems hit and, per hunk, its id, the head line range it maps
+        to, the systems and critical paths claiming it, and a state: covered,
+        incidental, unclaimed, or superseded when later commits replaced its lines.
+        """
         path = fp.path
-        file_anchors = [a for a in anchors if a["owner_kind"] == "system" and a["side"] == "new"
-                        and a["path"] == path and a["range"]]
-        if not file_anchors or fp.binary or fp.status == "D":
-            return set()
-        commit_text = self.text_of_blob(fp.new_blob)
-        head_text = self.text_at(self.head_rev, path)
-        if commit_text is None or head_text is None:
-            return set()
-        mapping = diffparse.line_map(commit_text, head_text) if commit_text != head_text else None
+        noise = diffparse.classify_noise(path)
+        incidental = bool(noise) or records.is_incidental(path, self.incidental)
+        file_anchors = [a for a in anchors if a["side"] == "new" and a["path"] == path and a["range"]]
+        rows: List[dict] = []
         hit: Set[str] = set()
+        mapping = None
+        usable = not (fp.binary or fp.status == "D")
+        if usable:
+            commit_text = self.text_of_blob(fp.new_blob)
+            head_text = self.text_at(self.head_rev, path)
+            if commit_text is None or head_text is None:
+                usable = False
+            elif commit_text != head_text:
+                mapping = diffparse.line_map(commit_text, head_text)
         for hunk in fp.hunks:
-            start, end = hunk.new_range()
-            rng = (start, end) if mapping is None else diffparse.map_range(mapping, start, end)
-            if rng is None:
-                continue
-            for a in file_anchors:
-                if diffparse.ranges_overlap(a["range"], rng):
-                    hit.add(a["owner"])
-        return hit
+            row = {"id": hunk.id, "head_range": None, "systems": [], "tests": [], "critical_paths": []}
+            if usable:
+                start, end = hunk.new_range()
+                rng = (start, end) if mapping is None else diffparse.map_range(mapping, start, end)
+                if rng is not None:
+                    row["head_range"] = list(rng)
+                    for a in file_anchors:
+                        if diffparse.ranges_overlap(a["range"], rng):
+                            key = "systems" if a["owner_kind"] == "system" else "tests"
+                            if a["owner"] not in row[key]:
+                                row[key].append(a["owner"])
+                            if a["critical_path"]:
+                                row["critical_paths"].append(f"{a['owner']}/{a['critical_path']}")
+            hit.update(row["systems"])
+            if row["systems"] or row["tests"]:
+                row["state"] = "covered"
+            elif incidental:
+                row["state"] = "incidental"
+            elif usable and row["head_range"] is None and hunk.new_len > 0:
+                row["state"] = "superseded"
+            else:
+                row["state"] = "unclaimed"
+            rows.append(row)
+        return hit, rows
 
     # --- review queue ------------------------------------------------------------------------------
 
