@@ -35,13 +35,17 @@ def _identity_env(project_dir: Path) -> Dict[str, str]:
     return env
 
 
-def _git(project_dir: Path, args: List[str], check: bool = True, ok_codes=(0,)) -> str:
+NETWORK_TIMEOUT = 120  # seconds; an unreachable remote or an SSH prompt must not hang an agent's command
+
+
+def _git(project_dir: Path, args: List[str], check: bool = True, ok_codes=(0,), timeout=None) -> str:
     return gitutil.run(
         ["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", *args],
         project_dir,
         check=check,
         env_extra=_identity_env(project_dir),
         ok_codes=ok_codes,
+        timeout=timeout,
     )
 
 
@@ -176,7 +180,7 @@ def pull(project_dir: Path, cfg: Optional[Config] = None) -> dict:
     branch = _branch(project_dir)
     with lock(project_dir):
         try:
-            _git(project_dir, ["fetch", "-q", "origin"])
+            _git(project_dir, ["fetch", "-q", "origin"], timeout=NETWORK_TIMEOUT)
         except gitutil.GitError as exc:
             return {"pulled": False, "reason": exc.stderr or str(exc)}
         remote_ref = f"refs/remotes/origin/{branch}"
@@ -202,7 +206,7 @@ def push(project_dir: Path, cfg: Optional[Config] = None) -> dict:
     branch = _branch(project_dir)
     with lock(project_dir):
         try:
-            _git(project_dir, ["push", "-q", "origin", f"HEAD:refs/heads/{branch}"])
+            _git(project_dir, ["push", "-q", "origin", f"HEAD:refs/heads/{branch}"], timeout=NETWORK_TIMEOUT)
         except gitutil.GitError as exc:
             return {"pushed": False, "reason": exc.stderr or str(exc)}
     return {"pushed": True}

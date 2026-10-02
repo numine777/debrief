@@ -48,15 +48,20 @@ def run_bytes(
     input_bytes: Optional[bytes] = None,
     env_extra: Optional[Dict[str, str]] = None,
     ok_codes: Tuple[int, ...] = (0,),
+    timeout: Optional[float] = None,
 ) -> bytes:
-    proc = subprocess.run(
-        ["git", *BASE_ARGS, *args],
-        cwd=str(cwd),
-        input=input_bytes,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=_env(env_extra),
-    )
+    try:
+        proc = subprocess.run(
+            ["git", *BASE_ARGS, *args],
+            cwd=str(cwd),
+            input=input_bytes,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=_env(env_extra),
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        raise GitError(args, -1, f"timed out after {timeout:.0f}s") from None
     if check and proc.returncode not in ok_codes:
         raise GitError(args, proc.returncode, proc.stderr.decode("utf-8", "replace"))
     return proc.stdout
@@ -69,6 +74,7 @@ def run(
     input_text: Optional[str] = None,
     env_extra: Optional[Dict[str, str]] = None,
     ok_codes: Tuple[int, ...] = (0,),
+    timeout: Optional[float] = None,
 ) -> str:
     data = run_bytes(
         args,
@@ -77,6 +83,7 @@ def run(
         input_bytes=input_text.encode("utf-8") if input_text is not None else None,
         env_extra=env_extra,
         ok_codes=ok_codes,
+        timeout=timeout,
     )
     return data.decode("utf-8", "replace")
 
