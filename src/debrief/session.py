@@ -572,11 +572,16 @@ def cmd_run(ctx: Optional[Context], args) -> int:
         proc = None
     if proc is not None:
         assert proc.stdout is not None
+        sink = getattr(sys.stdout, "buffer", None)
         try:
             for raw in iter(proc.stdout.readline, b""):
-                sys.stdout.buffer.write(raw)
-                sys.stdout.buffer.flush()
-                tail.append(raw.decode("utf-8", "replace").rstrip("\n")[:2000])
+                text = raw.decode("utf-8", "replace")
+                if sink is not None:
+                    sink.write(raw)
+                    sink.flush()
+                else:
+                    sys.stdout.write(text)
+                tail.append(text.rstrip("\n")[:2000])
             code = proc.wait()
         except KeyboardInterrupt:
             proc.terminate()
