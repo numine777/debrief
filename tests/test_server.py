@@ -165,3 +165,16 @@ class OfflineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScriptSyntaxTests(unittest.TestCase):
+    def test_scripts_parse(self):
+        import shutil
+        import subprocess
+
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        for path in sorted((STATIC / "js").glob("*.js")):
+            proc = subprocess.run([node, "--check", str(path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.assertEqual(proc.returncode, 0, f"{path.name}: {proc.stderr}")
