@@ -171,9 +171,10 @@
           if (end >= lines.length - 1) below.remove();
         } catch (err) { D.toast(err.message); below.remove(); }
       });
-      if (sideStart > 1) el.appendChild(above);
+      const wholeFile = file.status === "A" || file.status === "D";
+      if (sideStart > 1 && !wholeFile) el.appendChild(above);
       el.appendChild(table);
-      el.appendChild(below);
+      if (!wholeFile) el.appendChild(below);
     } else {
       el.appendChild(table);
     }
