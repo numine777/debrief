@@ -670,7 +670,7 @@ def describe_explanations(ctx: Context, files: List[str]) -> List[Tuple[str, str
         weak = sorted({sid for sid, strength in claims if strength == "weak"})
         if strong:
             rows.append((path, "explained by " + ", ".join(strong)))
-        elif path in incidental:
+        elif records.is_incidental(path, incidental):
             rows.append((path, "incidental"))
         elif weak:
             rows.append((path, "path anchor only (weak): " + ", ".join(weak)))

@@ -198,6 +198,44 @@ def anchor_strength(anchor: dict) -> str:
     return "strong" if anchor.get("symbol") or anchor.get("lines") else "weak"
 
 
+_GLOB_CACHE: Dict[str, "re.Pattern[str]"] = {}
+
+
+def glob_match(pattern: str, path: str) -> bool:
+    """Match a repo path against a glob where ``*`` stays within a directory and ``**`` spans them."""
+    if pattern == path:
+        return True
+    if not any(ch in pattern for ch in "*?["):
+        return path.startswith(pattern.rstrip("/") + "/") if pattern.endswith("/") else False
+    compiled = _GLOB_CACHE.get(pattern)
+    if compiled is None:
+        out, i = [], 0
+        while i < len(pattern):
+            ch = pattern[i]
+            if pattern.startswith("**/", i):
+                out.append("(?:.*/)?")
+                i += 3
+            elif pattern.startswith("**", i):
+                out.append(".*")
+                i += 2
+            elif ch == "*":
+                out.append("[^/]*")
+                i += 1
+            elif ch == "?":
+                out.append("[^/]")
+                i += 1
+            else:
+                out.append(re.escape(ch))
+                i += 1
+        compiled = re.compile("^" + "".join(out) + "$")
+        _GLOB_CACHE[pattern] = compiled
+    return bool(compiled.match(path))
+
+
+def is_incidental(path: str, patterns: List[str]) -> bool:
+    return any(glob_match(p, path) for p in patterns)
+
+
 # --- loading --------------------------------------------------------------------
 
 

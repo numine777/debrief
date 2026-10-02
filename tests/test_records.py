@@ -81,6 +81,18 @@ class AnchorTests(unittest.TestCase):
         self.assertIsNone(records.parse_lines(True))
 
 
+class GlobTests(unittest.TestCase):
+    def test_glob_match(self):
+        self.assertTrue(records.glob_match("vendor/**", "vendor/a/b.py"))
+        self.assertTrue(records.glob_match("src/*.py", "src/a.py"))
+        self.assertFalse(records.glob_match("src/*.py", "src/x/a.py"))
+        self.assertTrue(records.glob_match("**/LICENSE", "a/b/LICENSE"))
+        self.assertTrue(records.glob_match("**/LICENSE", "LICENSE"))
+        self.assertTrue(records.glob_match("docs/", "docs/x.md"))
+        self.assertFalse(records.glob_match("README.md", "docs/README.md"))
+        self.assertTrue(records.is_incidental("a.lock", ["*.lock"]))
+
+
 class JournalTests(unittest.TestCase):
     def test_entries_and_issues(self):
         text = ("# Journal\n\n### 2026-10-02T19:41Z · plan\nDo it.\n\n"

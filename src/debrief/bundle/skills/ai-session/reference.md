@@ -44,8 +44,9 @@ An anchor links prose to code: `{path, symbol, lines, role}`.
   feature's base instead of the current code.
 
 Only anchors with a symbol or line range explain code. A path-only anchor is a
-weak claim. Files too trivial for a system (a renamed import, a version bump) go
-under `incidental` in the brief.
+weak claim. Files too trivial for a system (a renamed import, a version bump,
+vendored code) go under `incidental` in the brief, as paths or globs such as
+`vendor/**` (`*` stays within a directory, `**` spans directories).
 
 ## journal.md
 
@@ -74,7 +75,7 @@ status: in_progress                    # in_progress | ready_for_review | merged
 sessions: [20261002T193000Z-4f2a]      # every session that worked on the feature
 review_first:                          # at most three
   - {target: retry-queue/drain-loop, why: "Only unbounded loop in the feature"}
-incidental: [src/util/strings.py]      # changed, but not worth a system
+incidental: [src/util/strings.py, vendor/**]   # changed, not worth a system; globs allowed
 ---
 ```
 
