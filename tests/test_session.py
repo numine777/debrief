@@ -1,0 +1,191 @@
+import json
+import unittest
+
+from tests.helpers import IsolatedTestCase, git
+
+from debrief import records, session, util
+
+
+class SessionFlowTests(IsolatedTestCase):
+    def setUp(self):
+        super().setUp()
+        self.repo = self.make_repo()
+        git(self.repo, "checkout", "-q", "-b", "feat/retry")
+        self.pid = self.init_project(self.repo)
+        self.fdir = self.feature_dir(self.pid, "feat--retry")
+
+    def legs(self):
+        return records.load_legs(self.fdir)
+
+    def test_untracked_repo_is_skipped(self):
+        other = self.make_repo("other")
+        out = self.run_session(other, "start")
+        self.assertIn("isn't tracked", out)
+        self.assertEqual(self.last_code, 0)
+
+    def test_outside_git(self):
+        out = self.run_session(self.tmp, "start")
+        self.assertIn("Not inside a git repository", out)
+
+    def test_start_opens_leg_and_session(self):
+        base = git(self.repo, "rev-parse", "main")
+        out = self.run_session(self.repo, "start", "--task", "Add retries")
+        self.assertIn("leg-01 (new)", out)
+        self.assertIn(str(self.fdir), out)
+        legs = self.legs()
+        self.assertEqual(len(legs), 1)
+        self.assertEqual(legs[0]["base_ref"], base)
+        self.assertEqual(legs[0]["branch"], "feat/retry")
+        sessions = list((self.fdir / "sessions").iterdir())
+        self.assertEqual(len(sessions), 1)
+        meta = json.loads((sessions[0] / "session.json").read_text())
+        self.assertEqual(meta["status"], "in_progress")
+        self.assertEqual(meta["harness"], "test-harness")
+        self.assertEqual(meta["task"], "Add retries")
+        self.assertEqual(meta["protocol"], records.PROTOCOL)
+        # Nothing was written into the repository.
+        self.assertEqual(git(self.repo, "status", "--porcelain", "--ignored"), "")
+
+    def test_now_logs_commits_with_patch_ids(self):
+        self.run_session(self.repo, "start")
+        sha = self.commit(self.repo, "Add retry", {"retry.py": "def retry():\n    pass\n"})
+        out = self.run_session(self.repo, "now")
+        first = out.splitlines()[0]
+        self.assertIsNotNone(util.parse_iso(first))
+        self.assertIn("Logged 1 commit", out)
+        commits = self.legs()[0]["commits"]
+        self.assertEqual(commits[0]["sha"], sha)
+        self.assertTrue(commits[0]["patch_id"])
+        self.run_session(self.repo, "now")
+        self.assertEqual(len(self.legs()[0]["commits"]), 1)
+
+    def test_commits_between_sessions_are_not_logged(self):
+        self.run_session(self.repo, "start")
+        self.run_session(self.repo, "close")
+        self.commit(self.repo, "Developer change", {"dev.py": "x = 1\n"})
+        self.run_session(self.repo, "start")
+        self.commit(self.repo, "Agent change", {"agent.py": "y = 2\n"})
+        self.run_session(self.repo, "now")
+        subjects = [c["subject"] for c in self.legs()[0]["commits"]]
+        self.assertEqual(subjects, ["Agent change"])
+
+    def test_unclosed_session_keeps_its_commits(self):
+        self.run_session(self.repo, "start")
+        first = self.legs()[0]["sessions"][0]["session_id"]
+        self.commit(self.repo, "Made before the agent stopped", {"a.py": "a = 1\n"})
+        out = self.run_session(self.repo, "start")
+        self.assertIn("ended without `close`", out)
+        commits = self.legs()[0]["commits"]
+        self.assertEqual(commits[0]["session_id"], first)
+
+    def test_run_records_exit_code_and_output(self):
+        self.run_session(self.repo, "start")
+        self.run_session(self.repo, "run", "echo hello; exit 3")
+        self.assertEqual(self.last_code, 3)
+        runs = list(self.fdir.glob("sessions/*/runs/*.json"))
+        self.assertEqual(len(runs), 1)
+        record = json.loads(runs[0].read_text())
+        self.assertEqual(record["exit_code"], 3)
+        self.assertEqual(record["command"], "echo hello; exit 3")
+        self.assertIn("hello", record["output_tail"])
+        self.assertEqual(record["head"], git(self.repo, "rev-parse", "HEAD"))
+
+    def test_run_without_session_still_runs(self):
+        self.run_session(self.repo, "run", "true")
+        self.assertEqual(self.last_code, 0)
+        self.assertFalse(list(self.archive.glob("**/runs/*.json")))
+
+    def test_changed_reports_explanations(self):
+        self.run_session(self.repo, "start")
+        self.commit(self.repo, "Change app", {"app.py": "def main():\n    return 1\n", "notes.txt": "n\n"})
+        self.write(self.repo / "wip.py", "pending = True\n")
+        self.write_records(self.fdir)
+        out = self.run_session(self.repo, "changed")
+        self.assertIn("app.py", out)
+        self.assertIn("explained by app", out)
+        self.assertIn("notes.txt  NOT EXPLAINED", out)
+        self.assertIn("Uncommitted", out)
+        self.assertIn("wip.py", out)
+
+    def test_close_request_and_feedback_are_relayed(self):
+        self.run_session(self.repo, "start")
+        leg = self.legs()[0]
+        leg["close_requested_at"] = util.now_iso()
+        leg["close_requested_by"] = "dev"
+        util.write_json(self.fdir / "legs" / "leg-01.json", leg)
+        self.write(self.fdir / "feedback.md", "## 2026-10-02T20:00:00Z · dev\n\n1. app.py:1\n   Fix it.\n")
+        out = self.run_session(self.repo, "now")
+        self.assertIn("REQUEST from dev: close out leg-01", out)
+        self.assertIn("FEEDBACK: 1 new review item", out)
+        out = self.run_session(self.repo, "now")
+        self.assertIn("REQUEST", out)
+        self.assertNotIn("FEEDBACK", out)
+
+    def test_close_requires_handoff_warning(self):
+        self.run_session(self.repo, "start")
+        out = self.run_session(self.repo, "close")
+        self.assertIn("no `handoff` entry", out)
+        self.run_session(self.repo, "start")
+        self.append_journal(self.fdir, "handoff", "Done.")
+        out = self.run_session(self.repo, "close", "blocked")
+        self.assertNotIn("handoff", out.split("closed")[1])
+        metas = [json.loads(p.read_text()) for p in self.fdir.glob("sessions/*/session.json")]
+        self.assertIn("blocked", {m["status"] for m in metas})
+
+    def test_publish_refuses_without_records_then_closes_leg(self):
+        self.run_session(self.repo, "start")
+        sha = self.commit(self.repo, "Change app", {"app.py": "def main():\n    return 2\n"})
+        out = self.run_session(self.repo, "publish")
+        self.assertEqual(self.last_code, 1)
+        self.assertIn("Refusing to publish", out)
+        self.write_records(self.fdir)
+        self.append_journal(self.fdir, "handoff", "Done.")
+        out = self.run_session(self.repo, "publish")
+        self.assertEqual(self.last_code, 0, out)
+        leg = self.legs()[0]
+        self.assertTrue(leg["closed_at"])
+        self.assertEqual(leg["head_ref"], sha)
+        self.assertEqual(leg["head_tree"], git(self.repo, "rev-parse", "HEAD^{tree}"))
+        project_dir = self.archive / "projects" / self.pid
+        log = git(project_dir, "log", "--format=%s")
+        self.assertIn("Close leg-01 of feat--retry: Test feature", log)
+        self.assertEqual(git(project_dir, "status", "--porcelain"), "")
+        # The next session opens leg-02 based on leg-01's head.
+        out = self.run_session(self.repo, "start")
+        self.assertIn("leg-02 (new)", out)
+        self.assertIn("Existing brief", out)
+        self.assertEqual(self.legs()[1]["base_ref"], sha)
+
+    def test_publish_refuses_dirty_worktree(self):
+        self.run_session(self.repo, "start")
+        self.write_records(self.fdir)
+        self.write(self.repo / "app.py", "changed = True\n")
+        out = self.run_session(self.repo, "publish")
+        self.assertEqual(self.last_code, 1)
+        self.assertIn("commit the remaining code first", out)
+
+    def test_context_does_not_change_state(self):
+        out = self.run_session(self.repo, "context")
+        self.assertIn("run `debrief-session start`", out)
+        self.assertFalse(self.fdir.exists())
+        self.run_session(self.repo, "start")
+        out = self.run_session(self.repo, "context")
+        self.assertIn("is open for feature feat--retry", out)
+
+    def test_worktrees_share_one_project(self):
+        wt = self.tmp / "wt"
+        git(self.repo, "worktree", "add", "-q", "-b", "feat/other", str(wt))
+        out = self.run_session(wt, "start")
+        self.assertIn("feat--other", out)
+        self.assertTrue(self.feature_dir(self.pid, "feat--other").exists())
+
+    def test_detect_harness_env(self):
+        import os
+
+        os.environ.pop("DEBRIEF_HARNESS", None)
+        os.environ["CLAUDECODE"] = "1"
+        self.assertEqual(session.detect_harness(), "claude-code")
+
+
+if __name__ == "__main__":
+    unittest.main()
