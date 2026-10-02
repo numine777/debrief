@@ -14,12 +14,14 @@ from typing import Dict, List, Optional
 
 from . import paths, records, util
 
+SCHEMA_VERSION = "2"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS features (
   project_id TEXT, feature_id TEXT, title TEXT, status TEXT, epic TEXT, branch TEXT,
-  updated_at TEXT, coverage REAL, units INTEGER, unclaimed INTEGER, legs INTEGER, open_legs INTEGER,
-  open_leg_commits INTEGER, queue INTEGER, high INTEGER, sessions INTEGER, head TEXT, base TEXT,
-  summary TEXT, PRIMARY KEY (project_id, feature_id));
+  updated_at TEXT, coverage REAL, units INTEGER, covered INTEGER, incidental INTEGER, weak INTEGER,
+  unclaimed INTEGER, legs INTEGER, open_legs INTEGER, open_leg TEXT, open_leg_commits INTEGER,
+  close_requested_at TEXT, queue INTEGER, high INTEGER, sessions INTEGER, head TEXT, base TEXT,
+  landed TEXT, summary TEXT, PRIMARY KEY (project_id, feature_id));
 CREATE TABLE IF NOT EXISTS commits (
   sha TEXT, project_id TEXT, feature_id TEXT, leg_id TEXT, kind TEXT, subject TEXT, committed_at TEXT,
   PRIMARY KEY (sha, project_id, feature_id));
@@ -43,7 +45,18 @@ def connect(root: Optional[Path] = None) -> sqlite3.Connection:
         conn.execute("PRAGMA journal_mode=WAL")
     except sqlite3.DatabaseError:
         pass
-    conn.executescript(SCHEMA)
+    conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+    row = conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
+    if row is None or row[0] != SCHEMA_VERSION:
+        # A cache: drop and rebuild rather than migrate.
+        for table in ("features", "commits", "landed", "search"):
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        conn.executescript(SCHEMA)
+        conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)", (SCHEMA_VERSION,))
+        conn.execute("DELETE FROM meta WHERE key LIKE 'default_tip:%'")
+        conn.commit()
+    else:
+        conn.executescript(SCHEMA)
     return conn
 
 
@@ -79,13 +92,18 @@ def _write_feature(conn: sqlite3.Connection, project_id: str, feature_id: str, f
     updated = max([s for s in stamps if s] or [evidence.get("computed_at") or ""])
     intent = records.find_section((feature.get("brief") or {}).get("sections", {}), "Intent") or ""
     conn.execute("DELETE FROM features WHERE project_id=? AND feature_id=?", (project_id, feature_id))
+    landed = util.read_json(Path(feature["path"]) / "evidence" / "landed.json", None) or {}
+    landed_sha = (landed.get("commits") or [{}])[-1].get("sha") if landed.get("commits") else None
+    open_leg = open_legs[-1] if open_legs else None
     conn.execute(
-        "INSERT INTO features VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO features VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (project_id, feature_id, brief.get("title") or feature_id, brief.get("status") or "in_progress",
-         brief.get("epic"), branch, updated, cov.get("ratio"), cov.get("units"), cov.get("unclaimed"), len(legs),
-         len(open_legs), open_commits, len(queue), sum(1 for i in queue if i["severity"] == "high"),
-         len(feature["sessions"]), evidence.get("head"), evidence.get("effective_base") or evidence.get("base"),
-         intent[:400]),
+         brief.get("epic"), branch, updated, cov.get("ratio"), cov.get("units"), cov.get("covered"),
+         cov.get("incidental"), cov.get("weak"), cov.get("unclaimed"), len(legs), len(open_legs),
+         open_leg["leg_id"] if open_leg else None, open_commits,
+         open_leg.get("close_requested_at") if open_leg else None, len(queue),
+         sum(1 for i in queue if i["severity"] == "high"), len(feature["sessions"]), evidence.get("head"),
+         evidence.get("effective_base") or evidence.get("base"), landed_sha, intent[:400]),
     )
     conn.execute("DELETE FROM commits WHERE project_id=? AND feature_id=?", (project_id, feature_id))
     for commit in evidence.get("commits") or []:
