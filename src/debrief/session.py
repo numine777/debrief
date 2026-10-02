@@ -295,12 +295,12 @@ def _process_ancestry(limit: int = 12) -> List[List[str]]:
                 break
         else:
             try:
-                out = subprocess.run(["ps", "-o", "ppid=,command=", "-p", str(pid)],
-                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout.strip()
+                out = subprocess.run(["ps", "-o", "ppid=,command=", "-p", str(pid)], stdout=subprocess.PIPE,
+                                     stderr=subprocess.DEVNULL, text=True, timeout=5).stdout.strip()
                 ppid_text, _, command = out.partition(" ")
                 ppid = int(ppid_text.strip() or 0)
                 cmd = command.split()
-            except (OSError, ValueError):
+            except (OSError, ValueError, subprocess.TimeoutExpired):
                 break
         chain.append(cmd)
         pid = ppid
