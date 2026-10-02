@@ -1,0 +1,10 @@
+tests:
+  - id: TEST-GROUP-ID
+    validates: [SYSTEM-ID/CRITICAL-PATH-ID]
+    claim: "The behavior these tests prove."
+    kind: unit
+    anchors: [{path: tests/test_file.py, symbol: test_function_name}]
+    command: "the exact command you ran with bin/session run"
+    claimed_result: pass
+gaps:
+  - {validates: SYSTEM-ID, note: "Behavior that no test covers yet"}
