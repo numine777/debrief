@@ -408,7 +408,8 @@
         "**/*_spec.rb",
         "**/*_test.cc",
         "**/*_unittest.cc"
-      ]
+      ],
+      "code_only": true
     },
     {
       "id": "test-skipped",
@@ -433,7 +434,8 @@
         "**/*_spec.rb",
         "**/*_test.cc",
         "**/*_unittest.cc"
-      ]
+      ],
+      "code_only": true
     }
   ]
 }
