@@ -72,7 +72,7 @@
       "kind": "retry",
       "severity": "medium",
       "on": "added",
-      "pattern": "\\b(?:time\\.sleep|asyncio\\.sleep|Thread\\.sleep|setTimeout|setInterval|usleep|nanosleep|tokio::time::sleep|std::this_thread::sleep_for)\\s*\\(|\\bsleep\\s+\\d",
+      "pattern": "\\b(?:time\\.sleep|asyncio\\.sleep|Thread\\.sleep|usleep|nanosleep|tokio::time::sleep|std::this_thread::sleep_for)\\s*\\(|\\bsleep\\s+\\d",
       "message": "Sleep or timer. Often part of a retry or polling loop that needs an invariant.",
       "exclude": [
         "**/*.md",
