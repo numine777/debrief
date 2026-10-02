@@ -18,15 +18,21 @@ except ImportError:  # pragma: no cover
 class ViewerSmokeTests(IsolatedTestCase):
     def setUp(self):
         super().setUp()
-        repo = self.make_repo(files={"app.py": "def main():\n    return 0\n", "util.py": "x = 1\n"})
+        tail = "".join(f"x{i} = {i}\n" for i in range(30))
+        repo = self.make_repo(files={"app.py": "def main():\n    return 0\n" + tail, "util.py": "x = 1\n"})
         git(repo, "checkout", "-q", "-b", "feat/ui")
         self.pid = self.init_project(repo)
         fdir = self.feature_dir(self.pid, "feat--ui")
         self.run_session(repo, "start")
-        self.sha = self.commit(repo, "Change main\n\nReturns one.", {"app.py": "def main():\n    while True:\n        return 1\n"})
+        self.sha = self.commit(repo, "Change main\n\nReturns one.", {"app.py": "def main():\n    while True:\n        return 1\n" + tail})
         self.commit(repo, "Touch util", {"util.py": "x = 2\n", "new.txt": "unexplained\n"})
         self.run_session(repo, "now")
         self.write_records(fdir)
+        # Agent prose is untrusted: a repo can carry injected text into records.
+        brief = (fdir / "brief.md").read_text().replace("## Intent\nTest.", (
+            "## Intent\nTest. <script>document.title='pwned'</script><img src=x onerror=\"document.title='pwned'\">"
+            " [click](javascript:document.title='pwned') ![remote](https://example.com/track.png)"))
+        (fdir / "brief.md").write_text(brief)
         ingest.ingest_feature(self.pid, "feat--ui")
         self.server = make_server(0, root=self.archive)
         self.port = self.server.server_address[1]
@@ -67,13 +73,27 @@ class ViewerSmokeTests(IsolatedTestCase):
                 page.locator("main", has_text=expected).wait_for(timeout=10000)
                 self.assertIn(expected, page.inner_text("main"), route)
             page.goto(base + feature)
+            page.locator("main", has_text="Intent").wait_for()
+            self.assertEqual(page.locator("main script").count(), 0)
+            self.assertEqual(page.locator("main img[onerror]").count(), 0)
+            self.assertEqual(page.locator("main a[href^='javascript']").count(), 0)
+            self.assertNotEqual(page.title(), "pwned")
+            page.goto(base + feature + "/diff?mode=systems")
+            page.locator(".hunk").first.wait_for()
+            before = page.locator("table.code tr").count()
+            page.locator(".file", has_text="app.py").locator(".ctx-btn", has_text="Show lines below").first.click()
+            page.locator("tr.ctx-extra").first.wait_for()
+            self.assertGreater(page.locator("table.code tr").count(), before)
+            page.goto(base + feature)
             page.wait_for_selector(".strip .cell")
             cells = page.locator(".feature-head .strip .cell").count()
             self.assertEqual(cells, 3)
             page.locator(".feature-head .strip .cell.state-unclaimed").first.click()
             page.wait_for_selector(".hunk.current")
             browser.close()
-        self.assertEqual(errors, [])
+        # The remote image is blocked by the CSP (reported as a console error); nothing else may fail.
+        unexpected = [e for e in errors if "example.com" not in e and "Content Security Policy" not in e]
+        self.assertEqual(unexpected, [])
 
 
 if __name__ == "__main__":
