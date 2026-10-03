@@ -315,6 +315,48 @@ class ProtocolFixTests(SessionFixture):
         self.assertIn("mod.py  NOT EXPLAINED at line 6", out)  # a's anchor sits next to it, but doesn't explain it
         self.assertIn("   M app.py", out)  # the first status entry keeps its leading space
 
+    def test_detached_work_keeps_its_feature_across_turns(self):
+        git(self.repo, "checkout", "-q", "--detach")
+        self.run_session(self.repo, "start")
+        [fdir] = list((self.archive / "projects" / self.pid / "features").iterdir())
+        self.commit(self.repo, "Detached work\n\nBody.", {"app.py": "y = 1\n"})
+        self.run_session(self.repo, "now")
+        self.append_journal(fdir, "handoff", "Turn one done.")
+        self.run_session(self.repo, "close")  # the Finish rule closes every turn
+        self.run_session(self.repo, "start", "--task", "Close out the leg")  # a later turn, same HEAD
+        features = [p.name for p in (self.archive / "projects" / self.pid / "features").iterdir()]
+        self.assertEqual(len(features), 1, features)
+
+    def test_unborn_branch_still_needs_systems_to_publish(self):
+        repo = self.tmp / "unborn"
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        pid = self.init_project(repo)
+        fdir = self.feature_dir(pid, "main")
+        self.run_session(repo, "start")
+        for i in range(2):
+            self.commit(repo, f"Commit {i}\n\nBody.", {f"f{i}.py": f"v = {i}\n"})
+        self.write_records(fdir)
+        for path in (fdir / "systems").glob("*.md"):
+            path.unlink()
+        self.append_journal(fdir, "handoff", "Done.")
+        out = self.run_session(repo, "publish")
+        self.assertEqual(self.last_code, 1, out)
+        self.assertIn("no system files", out)
+        self.assertIn("(start)..", self.run_session(repo, "changed"))
+
+    def test_a_new_leg_on_the_default_branch_starts_at_head(self):
+        git(self.repo, "checkout", "-q", "main")
+        fdir = self.feature_dir(self.pid, "main")
+        self.run_session(self.repo, "start")
+        self.commit(self.repo, "Mine\n\nBody.", {"mine.py": "m = 1\n"})
+        self.write_records(fdir)
+        self.append_journal(fdir, "handoff", "Done.")
+        self.run_session(self.repo, "publish")
+        others = self.commit(self.repo, "Someone else's\n\nBody.", {"theirs.py": "t = 1\n"})
+        self.run_session(self.repo, "start")
+        self.assertEqual(records.load_legs(fdir)[1]["base_ref"], others)
+
     def test_launcher_under_home_is_written_with_a_tilde(self):
         import os
 

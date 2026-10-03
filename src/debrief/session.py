@@ -82,10 +82,21 @@ class Context:
         return fid
 
     def _detached_feature(self) -> str:
-        """A detached HEAD keeps the feature its session started with, even as commits move HEAD."""
-        entry = _load_state()["sessions"].get(str(self.repo_root)) or {}
+        """A detached HEAD keeps its feature while work continues from where it was.
+
+        The open session names it; after a close (the Finish rule closes every
+        turn), the worktree's last detached feature still applies as long as
+        HEAD descends from where that feature last was.
+        """
+        state = _load_state()
+        key = str(self.repo_root)
+        entry = state["sessions"].get(key) or {}
         if entry.get("project_id") == self.project_id and str(entry.get("feature_id", "")).startswith("detached-"):
             return entry["feature_id"]
+        last = state["detached"].get(key) or {}
+        if last.get("project_id") == self.project_id and last.get("feature_id") and self.head and last.get("head") \
+                and (last["head"] == self.head or gitutil.is_ancestor(self.repo_root, last["head"], self.head)):
+            return last["feature_id"]
         return f"detached-{(self.head or 'unborn')[:8]}"
 
     @property
@@ -109,6 +120,7 @@ def _load_state() -> dict:
         data = {}
     data.setdefault("sessions", {})
     data.setdefault("pulls", {})
+    data.setdefault("detached", {})
     return data
 
 
@@ -148,6 +160,10 @@ def _set_current(ctx: Context, session_id: Optional[str]) -> None:
             }
         else:
             data["sessions"].pop(key, None)
+        if ctx.feature_id.startswith("detached-"):
+            # Remember where detached work stands, so the next turn finds the same feature.
+            data["detached"][key] = {"project_id": ctx.project_id, "feature_id": ctx.feature_id,
+                                     "head": gitutil.head(ctx.repo_root)}
         _save_state(data)
 
 
@@ -195,7 +211,10 @@ def ensure_open_leg(ctx: Context) -> Tuple[dict, bool]:
     previous = legs[-1] if legs else None
     number = records.leg_number(previous["leg_id"]) + 1 if previous else 1
     base = None
-    if previous:
+    on_default = bool(ctx.branch) and ctx.branch == gitutil.default_branch(ctx.repo_root)
+    if previous and on_default:
+        base = ctx.head  # on the default branch, commits since the last leg are other people's work
+    elif previous:
         prev_head = previous.get("head_commit") or previous.get("head_ref")
         if prev_head and prev_head != "WORKTREE" and ctx.head and gitutil.is_ancestor(ctx.repo_root, prev_head, ctx.head):
             base = prev_head
@@ -708,9 +727,10 @@ def worktree_state(repo: Path) -> Dict[str, Optional[str]]:
 
 
 def feature_base(ctx: Context) -> Optional[str]:
+    """Where the feature starts; None when its branch had no commits then (diff from the empty tree)."""
     legs = records.load_legs(ctx.feature_dir)
-    if legs and legs[0].get("base_ref"):
-        return legs[0]["base_ref"]
+    if legs:
+        return legs[0].get("base_ref")
     return _initial_base(ctx)
 
 
