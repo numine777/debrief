@@ -96,6 +96,8 @@ code, pre, .mono { font-family: var(--font-code); }
 .skip-link { position: absolute; left: 0.5rem; top: -3rem; z-index: 50; padding: 0.4rem 0.7rem; background: var(--sheet); border: 2px solid var(--focus); color: var(--ink); }
 .skip-link:focus { top: 0.5rem; }
 .outdated-note { margin: 0.4rem 0 0; color: var(--ink-2); }
+/* Agent and reviewer prose can hold long unbroken URLs and SHAs: they wrap instead of widening the page. */
+.prose, .comment, .reply, .quoted, .claim { overflow-wrap: anywhere; }
 [hidden] { display: none !important; }
 
 /* --- top bar ------------------------------------------------------------------ */

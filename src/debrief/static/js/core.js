@@ -59,8 +59,12 @@
     const type = resp.headers.get("Content-Type") || "";
     const data = type.includes("json") ? await resp.json() : await resp.text();
     if (!resp.ok) throw new ApiError(resp.status, (data && data.error) || resp.statusText);
-    if (init.method !== "GET" && data && typeof data.generation === "number" && window.Debrief) {
-      window.Debrief.knownGeneration = data.generation;
+    // A write reports the change count it produced. Adopt it only when it is the next count, so a
+    // teammate's change that landed just before ours still gets announced.
+    const D0 = window.Debrief;
+    if (init.method !== "GET" && data && typeof data.generation === "number" && D0 &&
+        typeof D0.knownGeneration === "number" && data.generation === D0.knownGeneration + 1) {
+      D0.knownGeneration = data.generation;
     }
     return data;
   }
