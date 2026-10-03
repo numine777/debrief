@@ -213,6 +213,7 @@
         feature.epic ? h("a", { class: "chip", href: `#/epic/${enc(feature.epic)}` }, `Epic ${feature.epic}`) : null,
         landed ? h("a", { class: "chip", href: `#/commit/${landed.sha}` }, `Landed as ${short(landed.sha)}`) : null,
         h("span", { class: "when" }, ev.computed_at ? `Evidence from ${ago(ev.computed_at)}` : "No evidence yet",
+          ev.computed_on && D.meta && D.meta.host && ev.computed_on !== D.meta.host ? `, computed on ${ev.computed_on}` : "",
           ev.repo_available === false ? " (repository not on this host)" : ""),
         refresh),
       h("div", null,

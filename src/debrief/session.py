@@ -205,38 +205,61 @@ def ensure_open_leg(ctx: Context) -> Tuple[dict, bool]:
 
 
 def log_commits(ctx: Context, session: Optional[dict], leg: dict, session_id: Optional[str]) -> List[dict]:
-    """Record commits the branch gained since the session last looked."""
-    head = gitutil.head(ctx.repo_root)
+    """Record commits the branch gained since the session last looked.
+
+    Only the branch's own new commits count: commits merged in from the
+    default branch are other people's, a rebase's copies of commits already
+    logged aren't new, and after an amend or rebase only what follows the
+    newest point the old and new histories share was made now.
+    """
+    repo = ctx.repo_root
+    head = gitutil.head(repo)
     if not head or session is None:
         return []
     last = session.get("last_seen_head")
     if head == last:
         return []
-    if last and gitutil.is_ancestor(ctx.repo_root, last, head):
-        new = gitutil.rev_list(ctx.repo_root, f"{last}..{head}")
-    else:
-        base = leg.get("base_ref")
-        new = gitutil.rev_list(ctx.repo_root, f"{base}..{head}") if base else [head]
+    upstream = gitutil.upstream_refs(repo, ctx.branch)
+    if last and gitutil.is_ancestor(repo, last, head):
+        start: Optional[str] = last
+    elif last or leg.get("base_ref"):
+        candidates = [gitutil.merge_base(repo, last, head) if last and gitutil.rev_parse(repo, last) else None]
+        candidates += [gitutil.merge_base(repo, ref, head) for ref in upstream]
+        candidates = [c for c in candidates if c and c != head]
+        start = gitutil.newest(repo, candidates) or (candidates[0] if candidates else leg.get("base_ref"))
         if last:
             session.setdefault("events", []).append(
                 {"at": util.now_iso(), "kind": "history-rewritten", "from": last, "to": head})
-    known = {c.get("sha") for c in leg.get("commits", [])}
+    else:
+        start = None  # the branch had no commits when the session started
+    known_shas, known_pids = set(), set()
+    for other in records.load_legs(ctx.feature_dir) + [leg]:
+        for entry in other.get("commits", []):
+            known_shas.add(entry.get("sha"))
+            if entry.get("patch_id"):
+                known_pids.add(entry["patch_id"])
     logged = []
-    for sha in new:
-        if sha in known:
+    for sha in gitutil.branch_commits(repo, start, head, upstream):
+        if sha in known_shas:
             continue
-        meta = gitutil.commit_meta(ctx.repo_root, sha) or {}
+        meta = gitutil.commit_meta(repo, sha) or {}
         merge = len(meta.get("parents", [])) > 1
+        pid = None if merge else gitutil.patch_id(repo, gitutil.commit_patch(repo, sha))
+        if pid and pid in known_pids:
+            continue  # a rebased copy of work already logged
         entry = {
             "sha": sha,
             "session_id": session_id,
             "logged_at": util.now_iso(),
             "subject": meta.get("subject", ""),
-            "patch_id": None if merge else gitutil.patch_id(ctx.repo_root, gitutil.commit_patch(ctx.repo_root, sha)),
+            "patch_id": pid,
         }
         if merge:
             entry["merge"] = True
         leg.setdefault("commits", []).append(entry)
+        known_shas.add(sha)
+        if pid:
+            known_pids.add(pid)
         logged.append(entry)
     session["last_seen_head"] = head
     return logged

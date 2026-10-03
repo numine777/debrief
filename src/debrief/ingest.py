@@ -100,6 +100,9 @@ class FeatureIngest:
         self._stored_blobs: Set[str] = set()
         self.incidental: List[str] = []
         self.head_rev: Optional[str] = None
+        self._head_cache: Optional[Tuple[Optional[str], List[str]]] = None
+        self._upstream_cache: Optional[List[str]] = None
+        self._commit_cache: Dict[str, Tuple[dict, str, Optional[str]]] = {}
 
     # --- locating code ---------------------------------------------------------
 
@@ -177,25 +180,60 @@ class FeatureIngest:
         feature = records.load_feature(self.feature_dir)
         legs = feature["legs"]
         previous = util.read_json(self.evidence_dir / "evidence.json", None)
+        previous = previous if isinstance(previous, dict) else None
         self.repo = self.find_repo(feature)
         if not legs:
-            return self._write(self._skeleton(feature, note="No legs yet: no session has started."))
+            return self._write(self._skeleton(feature, note="No legs yet: no session has started."), previous)
         if self.repo is None:
-            if isinstance(previous, dict):
-                previous["issues"] = records.all_issues(feature)
-                previous["repo_available"] = False
-                return previous
-            return self._write(self._skeleton(feature, note="The repository is not on this host."))
+            return self._keep(previous, feature, "The repository is not on this host.")
         self.blobs = BlobReader(self.repo)
         try:
-            return self._write(self._compute(feature))
+            missing = self._missing_history(feature, previous)
+            if missing:
+                return self._keep(previous, feature, missing)
+            return self._write(self._compute(feature), previous)
         finally:
             self.blobs.close()
+
+    def _keep(self, previous: Optional[dict], feature: dict, note: str) -> dict:
+        """Keep the archived evidence (it syncs to every host) rather than replace it with less."""
+        if previous is not None and previous.get("repo_available") is not False:
+            kept = dict(previous)  # returned, not written: the archived file stays as its host wrote it
+            kept.update(issues=records.all_issues(feature), stale_note=note, repo_available=False)
+            return kept
+        return self._write(self._skeleton(feature, note=note), previous)
+
+    def _missing_history(self, feature: dict, previous: Optional[dict]) -> Optional[str]:
+        """Why this host can't compute the feature's evidence, if it can't.
+
+        A host whose clone lacks the feature's commits (the branch was never
+        fetched, or was deleted after a squash merge and pruned) would compute
+        an empty diff; one whose branch is behind would compute an older one.
+        Either would overwrite good evidence that then syncs to every host.
+        """
+        head, _pending = self._feature_head(feature)
+        if head is None or not self.object_exists(head):
+            return ("The feature's commits aren't in this repository (the branch wasn't fetched here, or it was "
+                    "deleted and pruned), so the archived evidence stands.")
+        base = feature["legs"][0].get("base_ref")
+        if base and not self.object_exists(base):
+            return "The feature's base commit isn't in this repository, so the archived evidence stands."
+        if previous and previous.get("computed_on") not in (None, util.hostname()):
+            recorded = previous.get("head_commit")
+            if recorded and recorded != head:
+                if not self.object_exists(recorded):
+                    return (f"{previous['computed_on']} recorded evidence at {recorded[:9]}, which this repository "
+                            "doesn't have yet; fetch the branch to refresh it here.")
+                if gitutil.is_ancestor(self.repo, head, recorded):
+                    return (f"This host's branch is behind the evidence {previous['computed_on']} recorded at "
+                            f"{recorded[:9]}; fetch the branch to refresh it here.")
+        return None
 
     def _skeleton(self, feature: dict, note: str) -> dict:
         return {
             "evidence_version": EVIDENCE_VERSION,
             "computed_at": util.now_iso(),
+            "computed_on": util.hostname(),
             "debrief_version": __version__,
             "project_id": self.project_id,
             "feature_id": self.feature_id,
@@ -206,12 +244,22 @@ class FeatureIngest:
             "queue": [], "issues": records.all_issues(feature), "stats": {},
         }
 
-    def _write(self, evidence: dict) -> dict:
+    def _write(self, evidence: dict, previous: Optional[dict] = None) -> dict:
+        """Write evidence unless only its timestamp changed, so re-ingesting is a no-op for sync."""
+        if previous is not None and _same_evidence(previous, evidence):
+            evidence["computed_at"] = previous.get("computed_at")
+            return evidence
         util.write_json(self.evidence_dir / "evidence.json", evidence)
         return evidence
 
     def _feature_head(self, feature: dict) -> Tuple[Optional[str], List[str]]:
-        """(head commit, pending commits after the last closed leg)."""
+        """(head commit, pending commits after the last closed leg); (None, []) when this repo lacks it."""
+        if self._head_cache is not None:
+            return self._head_cache
+        self._head_cache = self._find_feature_head(feature)
+        return self._head_cache
+
+    def _find_feature_head(self, feature: dict) -> Tuple[Optional[str], List[str]]:
         legs = feature["legs"]
         last = legs[-1]
         branch = last.get("branch")
@@ -220,19 +268,27 @@ class FeatureIngest:
             closed_head = last.get("head_commit") or last.get("head_ref")
             if closed_head == "WORKTREE":
                 closed_head = None
-            if tip and closed_head and tip != closed_head and gitutil.is_ancestor(self.repo, closed_head, tip):
-                return tip, gitutil.rev_list(self.repo, f"{closed_head}..{tip}")
+            # A feature closed on the default branch ends at its last leg; later commits there are other work.
+            on_default = branch is not None and branch == gitutil.default_branch(self.repo)
+            if tip and closed_head and tip != closed_head and not on_default \
+                    and gitutil.is_ancestor(self.repo, closed_head, tip):
+                return tip, gitutil.branch_commits(self.repo, closed_head, tip, self._upstream(branch))
             if closed_head and self.object_exists(closed_head):
                 return closed_head, []
-            return tip, []
+            return (tip, []) if tip and not on_default else (None, [])
         if tip:
             return tip, []
         for sess in reversed(feature["sessions"]):
-            for key in ("head_commit", "last_seen_head", "base_ref"):
+            for key in ("head_commit", "last_seen_head"):
                 sha = sess["meta"].get(key)
                 if sha and self.object_exists(sha):
                     return sha, []
-        return last.get("base_ref"), []
+        return None, []
+
+    def _upstream(self, branch: Optional[str]) -> List[str]:
+        if self._upstream_cache is None:
+            self._upstream_cache = gitutil.upstream_refs(self.repo, branch)
+        return self._upstream_cache
 
     def _dirty_worktree(self, branch: Optional[str]) -> Optional[Path]:
         if not branch:
@@ -269,17 +325,19 @@ class FeatureIngest:
     def _compute(self, feature: dict) -> dict:
         legs = feature["legs"]
         head_commit, pending = self._feature_head(feature)
-        base = legs[0].get("base_ref") or head_commit
+        # No base means the branch had no commits when the first session started: diff from nothing.
+        base = legs[0].get("base_ref")
         branch = legs[-1].get("branch")
         self.worktree = self._dirty_worktree(branch) if not legs[-1].get("closed_at") else None
         self.head_rev = "WORKTREE" if self.worktree else head_commit
-        eff_base = self._effective_base(base, head_commit) if base and head_commit else base
+        eff_base = self._effective_base(base, head_commit) if base else None
+        diff_base = eff_base or gitutil.empty_tree(self.repo)
         logged_shas, logged_pids = self._logged(legs)
 
         # Feature patch and files -------------------------------------------------------------
-        patch_text = self._diff(eff_base, self.head_rev) if eff_base and self.head_rev else ""
-        patch_name = f"{eff_base}..{self.head_rev}.patch"
-        util.write_text(self.evidence_dir / patch_name, patch_text)
+        patch_text = self._diff(diff_base, self.head_rev)
+        patch_name = f"{diff_base}..{self.head_rev}.patch"
+        _write_text_if_changed(self.evidence_dir / patch_name, patch_text)
         files = diffparse.parse(patch_text)
         self._store_file_versions(files)
         feature_patch_id = gitutil.patch_id(self.repo, patch_text) if self.head_rev != "WORKTREE" else None
@@ -310,6 +368,7 @@ class FeatureIngest:
                                                               anchors)
 
         queue = self._queue(feature, file_entries, flags, anchors, test_evidence, cp_status, commit_entries)
+        self._prune_patches({patch_name} | {leg["patch"] for leg in leg_entries if leg.get("patch")})
         sessions = feature["sessions"]
         stats = {
             "files": len(files),
@@ -329,6 +388,7 @@ class FeatureIngest:
         return {
             "evidence_version": EVIDENCE_VERSION,
             "computed_at": util.now_iso(),
+            "computed_on": util.hostname(),
             "debrief_version": __version__,
             "project_id": self.project_id,
             "feature_id": self.feature_id,
@@ -355,6 +415,15 @@ class FeatureIngest:
             "issues": records.all_issues(feature),
             "stats": stats,
         }
+
+    def _prune_patches(self, keep: Set[str]) -> None:
+        """Each new head writes a cumulative patch; drop the ones nothing references any more."""
+        for path in self.evidence_dir.glob("*.patch"):
+            if path.name not in keep:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
 
     @staticmethod
     def _logged(legs: List[dict]) -> Tuple[Dict[str, dict], Dict[str, dict]]:
@@ -675,8 +744,13 @@ class FeatureIngest:
         depends = {}
         for system in feature["systems"]:
             depends[system["meta"]["id"]] = {d["system"] for d in system["meta"]["depends_on"]}
-        leg_entries, commit_entries = [], []
+        upstream = self._upstream(legs[-1].get("branch"))
+        on_branch = set(gitutil.branch_commits(self.repo, self._effective_base(legs[0].get("base_ref"), head)
+                                               if legs[0].get("base_ref") else None, head, upstream)) if head else set()
+        leg_entries, leg_shas = [], []
         seen: Set[str] = set()
+        owner_of_pid: Dict[str, Tuple[int, str]] = {}
+        replaced: Dict[str, str] = {}
         for i, leg in enumerate(legs):
             leg_base = leg.get("base_ref")
             closed = bool(leg.get("closed_at"))
@@ -685,24 +759,38 @@ class FeatureIngest:
             else:
                 leg_head = head
             shas: List[str] = []
-            if leg_base and leg_head and self.object_exists(leg_head):
-                eff = self._effective_base(leg_base, leg_head) if i == 0 else leg_base
-                shas = [s for s in gitutil.rev_list(self.repo, f"{eff}..{leg_head}") if s not in seen]
+            patch_name = None
+            if leg_head and self.object_exists(leg_head):
+                eff = self._leg_base(i, leg_base, leg_head, upstream)
+                for sha in gitutil.branch_commits(self.repo, eff, leg_head, upstream):
+                    if sha in seen:
+                        continue
+                    seen.add(sha)
+                    pid = self._commit_info(sha)[2]
+                    earlier = owner_of_pid.get(pid) if pid else None
+                    if earlier is not None and earlier[0] < i:
+                        # A rebased copy of an earlier leg's commit. While the original is still on the
+                        # branch it's a duplicate; once history was rewritten, the copy stands in for it.
+                        j, original = earlier
+                        if original not in on_branch and sha in on_branch:
+                            leg_shas[j][leg_shas[j].index(original)] = sha
+                            replaced[sha] = original
+                            owner_of_pid[pid] = (j, sha)
+                        continue
+                    shas.append(sha)
+                    if pid:
+                        owner_of_pid[pid] = (i, sha)
                 if closed or self.head_rev != "WORKTREE":
-                    patch_name = f"{eff}..{leg_head}.patch"
+                    diff_base = eff or gitutil.empty_tree(self.repo)
+                    patch_name = f"{diff_base}..{leg_head}.patch"
                     target = self.evidence_dir / patch_name
                     if not target.exists() or not closed:
-                        util.write_text(target, self._diff(eff, leg_head))
-                else:
-                    patch_name = None
-            else:
-                patch_name = None
-            if not closed and self.head_rev == "WORKTREE" and leg_base:
-                patch_name = f"{leg_base}..WORKTREE.patch"
-                util.write_text(self.evidence_dir / patch_name, self._diff(leg_base, "WORKTREE"))
-            seen.update(shas)
-            for sha in shas:
-                commit_entries.append(self._commit(sha, leg["leg_id"], logged_shas, logged_pids, anchors, depends))
+                        _write_text_if_changed(target, self._diff(diff_base, leg_head))
+            if not closed and self.head_rev == "WORKTREE":
+                diff_base = leg_base or gitutil.empty_tree(self.repo)
+                patch_name = f"{diff_base}..WORKTREE.patch"
+                _write_text_if_changed(self.evidence_dir / patch_name, self._diff(diff_base, "WORKTREE"))
+            leg_shas.append(shas)
             leg_entries.append({
                 "leg_id": leg["leg_id"],
                 "base": leg_base,
@@ -718,25 +806,57 @@ class FeatureIngest:
                 "commits": shas,
                 "patch": patch_name,
             })
-        if pending:
-            for sha in pending:
-                if sha not in seen:
-                    commit_entries.append(self._commit(sha, None, logged_shas, logged_pids, anchors, depends))
+        commit_entries = []
+        for leg, shas in zip(legs, leg_shas):
+            for sha in shas:
+                commit_entries.append(self._commit(sha, leg["leg_id"], logged_shas, logged_pids, anchors, depends,
+                                                   rebased_from=replaced.get(sha)))
+        for sha in pending:
+            if sha not in seen:
+                commit_entries.append(self._commit(sha, None, logged_shas, logged_pids, anchors, depends))
         return leg_entries, commit_entries
 
-    def _commit(self, sha: str, leg_id: Optional[str], logged_shas, logged_pids, anchors, depends) -> dict:
-        path = self.evidence_dir / "commits" / f"{sha}.json"
-        stored = util.read_json(path, None)
+    def _leg_base(self, index: int, leg_base: Optional[str], leg_head: str, upstream: List[str]) -> Optional[str]:
+        """Where a leg's commits start.
+
+        The first leg drops upstream work merged into the branch (the effective
+        base). When a leg's recorded base is no longer below its head (a rebase
+        or reset rewrote history), its commits start at the newest point the
+        branch shares with its old base or with the default branch.
+        """
+        if leg_base is None:
+            return None
+        if self.object_exists(leg_base) and gitutil.is_ancestor(self.repo, leg_base, leg_head):
+            return self._effective_base(leg_base, leg_head) if index == 0 else leg_base
+        candidates = [gitutil.merge_base(self.repo, leg_base, leg_head) if self.object_exists(leg_base) else None]
+        candidates += [gitutil.merge_base(self.repo, ref, leg_head) for ref in upstream]
+        candidates = [c for c in candidates if c and c != leg_head]
+        best = gitutil.newest(self.repo, candidates)
+        if best is None and candidates:
+            best = candidates[0]
+        return best or leg_base
+
+    def _commit_info(self, sha: str) -> Tuple[dict, str, Optional[str]]:
+        """(metadata, patch, patch-id) for a commit, from the archived record when there is one."""
+        if sha in self._commit_cache:
+            return self._commit_cache[sha]
+        stored = util.read_json(self.evidence_dir / "commits" / f"{sha}.json", None)
         if isinstance(stored, dict) and stored.get("evidence_version") == EVIDENCE_VERSION and stored.get("patch") is not None:
             meta = {k: stored.get(k) for k in ("sha", "parents", "author", "author_email", "authored_at", "committer",
                                                  "committed_at", "tree", "subject", "body")}
-            patch_text = stored["patch"]
-            pid = stored.get("patch_id")
+            info = (meta, stored["patch"], stored.get("patch_id"))
         else:
             meta = gitutil.commit_meta(self.repo, sha) or {"sha": sha, "parents": [], "subject": "", "body": ""}
             merge = len(meta.get("parents") or []) > 1
             patch_text = "" if merge else gitutil.commit_patch(self.repo, sha)
-            pid = None if merge else gitutil.patch_id(self.repo, patch_text)
+            info = (meta, patch_text, None if merge else gitutil.patch_id(self.repo, patch_text))
+        self._commit_cache[sha] = info
+        return info
+
+    def _commit(self, sha: str, leg_id: Optional[str], logged_shas, logged_pids, anchors, depends,
+                rebased_from: Optional[str] = None) -> dict:
+        path = self.evidence_dir / "commits" / f"{sha}.json"
+        meta, patch_text, pid = self._commit_info(sha)
         merge = len(meta.get("parents") or []) > 1
         logged = logged_shas.get(sha) or (logged_pids.get(pid) if pid else None)
         kind = "merge" if merge else ("agent" if logged else "developer")
@@ -770,7 +890,7 @@ class FeatureIngest:
             "leg_id": leg_id,
             "kind": kind,
             "session_id": (logged or {}).get("session_id"),
-            "rebased_from": (logged or {}).get("sha") if logged and logged.get("sha") != sha else None,
+            "rebased_from": rebased_from or ((logged or {}).get("sha") if logged and logged.get("sha") != sha else None),
             "patch_id": pid,
             "patch": patch_text,
             "files": file_rows,
@@ -778,7 +898,7 @@ class FeatureIngest:
             "thin_message": thin,
             "non_atomic": non_atomic,
         })
-        util.write_json(path, record)
+        _write_json_if_changed(path, record)
         return {k: record[k] for k in ("sha", "leg_id", "kind", "session_id", "subject", "committed_at", "author",
                                        "systems", "thin_message", "non_atomic", "rebased_from")} | {
             "body": body, "files": [{"path": r["path"], "status": r["status"], "additions": r["additions"],
@@ -929,6 +1049,9 @@ class FeatureIngest:
         conflicts = util.read_json(self.project_dir / "conflicts.json", {}) or {}
         prefix = f"features/{self.feature_id}/"
         for conflict in conflicts.get("conflicts", []):
+            target = self.project_dir / conflict.get("path", "")
+            if not list(target.parent.glob(target.name + ".conflict-*")):
+                continue  # reconciled: the developer removed the other version
             if conflict.get("path", "").startswith(prefix):
                 add("sync-conflict", "medium", f"Sync kept two versions of {conflict['path'][len(prefix):]}",
                     f"Merged on {conflict.get('host')} at {conflict.get('at')}; compare the .conflict copy.",

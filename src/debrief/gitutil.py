@@ -175,15 +175,73 @@ def merge_base(path: Path | str, a: str, b: str) -> Optional[str]:
     return try_run(["merge-base", a, b], path) or None
 
 
-def rev_list(path: Path | str, range_spec: str, reverse: bool = True, first_parent: bool = False) -> List[str]:
+def rev_list(path: Path | str, range_spec: str, reverse: bool = True, first_parent: bool = False,
+             exclude: Sequence[str] = ()) -> List[str]:
     args = ["rev-list"]
     if reverse:
         args.append("--reverse")
     if first_parent:
         args.append("--first-parent")
     args.append(range_spec)
+    args += [f"^{ref}" for ref in exclude]
     out = try_run(args, path)
     return out.split() if out else []
+
+
+def commit_range(base: Optional[str], head: str) -> str:
+    """``base..head``, or every ancestor of head when there is no base (an unborn branch at start)."""
+    return f"{base}..{head}" if base else head
+
+
+def branch_commits(path: Path | str, base: Optional[str], head: str, exclude: Sequence[str] = ()) -> List[str]:
+    """Commits a branch gained between base and head, oldest first.
+
+    That is its first-parent line, plus commits merged in from anywhere except
+    ``exclude`` (normally the default branch). Merging main into a feature
+    brings main's commits along, but they are not the feature's: they stay
+    out, while a teammate's commits pulled from the same feature branch stay in.
+    """
+    spec = commit_range(base, head)
+    everything = rev_list(path, spec)
+    if not everything or not exclude:
+        return everything
+    own_line = set(rev_list(path, spec, first_parent=True))
+    elsewhere = set(rev_list(path, spec, exclude=exclude))
+    return [sha for sha in everything if sha in own_line or sha in elsewhere]
+
+
+def upstream_refs(path: Path | str, branch: Optional[str]) -> List[str]:
+    """The default branch's refs to leave out of a feature's commits; none when the feature is on it."""
+    name = default_branch(path)
+    if not name or branch == name:
+        return []
+    found = []
+    for ref in (f"refs/heads/{name}", f"refs/remotes/origin/{name}"):
+        if try_run(["rev-parse", "--verify", "-q", ref], path):
+            found.append(ref)
+    return found
+
+
+def newest(path: Path | str, commits: Sequence[Optional[str]]) -> Optional[str]:
+    """The commit among these that descends from all the others (None if they diverge or none is given)."""
+    present = [c for c in commits if c]
+    if not present:
+        return None
+    best = present[0]
+    for candidate in present[1:]:
+        if candidate == best or is_ancestor(path, candidate, best):
+            continue
+        if is_ancestor(path, best, candidate):
+            best = candidate
+        else:
+            return None
+    return best
+
+
+def empty_tree(path: Path | str) -> str:
+    """The id of the empty tree in this repository's hash (a base for diffs from nothing)."""
+    out = try_run(["hash-object", "-t", "tree", "/dev/null"], path)
+    return out or "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 
 _META_FORMAT = "%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%cI%x1f%T%x1f%s%x1f%b"

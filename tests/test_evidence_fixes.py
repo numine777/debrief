@@ -160,6 +160,52 @@ class KeepEvidenceTests(EvidenceFixture):
         self.run_session(self.repo, "publish")
         return json.loads((self.fdir / "evidence" / "evidence.json").read_text())
 
+    def test_pruned_branch_keeps_its_evidence(self):
+        before = self.publish()
+        git(self.repo, "checkout", "-q", "main")
+        git(self.repo, "merge", "-q", "--squash", "feat/fix")
+        git(self.repo, "commit", "-q", "-m", "Return one (#1)")
+        git(self.repo, "branch", "-q", "-D", "feat/fix")
+        git(self.repo, "reflog", "expire", "--expire=now", "--all")
+        git(self.repo, "gc", "-q", "--prune=now")
+        ev = self.evidence()
+        self.assertIn("aren't in this repository", ev["stale_note"])
+        after = json.loads((self.fdir / "evidence" / "evidence.json").read_text())
+        self.assertEqual(after, before)  # untouched on disk, so nothing bad syncs out
+        self.assertEqual(len(after["commits"]), 1)
+        index.rebuild()
+        out = self.run_cli("show", before["commits"][0]["sha"][:9], cwd=self.repo)
+        self.assertIn("feat--fix", out)
+
+    def test_host_without_the_commits_keeps_another_hosts_evidence(self):
+        before = self.publish()
+        before["computed_on"] = "host-a"
+        (self.fdir / "evidence" / "evidence.json").write_text(json.dumps(before))
+        clone = self.tmp / "host-b-clone"
+        # --no-local: copy only what main reaches, like a clone from a server the branch was never pushed to.
+        git(self.tmp, "clone", "-q", "--no-local", "--single-branch", "-b", "main", str(self.repo), str(clone))
+        ev = ingest.ingest_feature(self.pid, self.feature, repo=clone)
+        self.assertFalse(ev["repo_available"])
+        self.assertEqual(json.loads((self.fdir / "evidence" / "evidence.json").read_text())["computed_on"], "host-a")
+
+    def test_reingest_is_a_no_op_on_disk(self):
+        self.publish()
+        path = self.fdir / "evidence" / "evidence.json"
+        first = path.read_bytes()
+        self.evidence()
+        self.evidence()
+        self.assertEqual(path.read_bytes(), first)
+
+    def test_old_cumulative_patches_are_pruned(self):
+        self.start({"app.py": "x = 0\n"})
+        for i in range(1, 4):
+            self.commit(self.repo, f"Step {i}\n\nS.", {"app.py": f"x = {i}\n"})
+            self.run_session(self.repo, "now")
+            self.records()
+            ev = self.evidence()
+        patches = sorted(p.name for p in (self.fdir / "evidence").glob("*.patch"))
+        self.assertEqual(patches, sorted({ev["patch"]} | {leg["patch"] for leg in ev["legs"] if leg["patch"]}))
+
 class AttributionTests(EvidenceFixture):
     def kinds(self, ev):
         return [(c["subject"], c["kind"]) for c in ev["commits"]]
@@ -167,6 +213,96 @@ class AttributionTests(EvidenceFixture):
     def logged(self):
         legs = sorted((self.fdir / "legs").glob("*.json"))
         return [c["subject"] for leg in legs for c in json.loads(leg.read_text())["commits"]]
+
+    def test_amend_does_not_claim_a_developer_commit(self):
+        self.start({"app.py": "x = 1\n"})
+        self.run_session(self.repo, "close")
+        self.commit(self.repo, "Developer README\n\nDocs.", {"README.md": "hi\n"})
+        self.run_session(self.repo, "start")
+        self.commit(self.repo, "Agent work\n\nFirst try.", {"app.py": "x = 2\n"})
+        self.run_session(self.repo, "now")
+        self.write(self.repo / "app.py", "x = 3\n")
+        git(self.repo, "commit", "-q", "-a", "--amend", "-m", "Agent work\n\nAmended.")
+        out = self.run_session(self.repo, "now")
+        self.assertIn("Logged 1 commit", out)
+        self.assertEqual(self.logged(), ["Agent work", "Agent work"])
+        self.records()
+        kinds = dict(self.kinds(self.evidence()))
+        self.assertEqual(kinds["Developer README"], "developer")
+        self.assertEqual(kinds["Agent work"], "agent")
+
+    def test_merging_main_does_not_log_or_list_upstream_commits(self):
+        self.start({"app.py": "x = 1\n"})
+        self.commit(self.repo, "Agent one\n\nOne.", {"app.py": "x = 2\n"})
+        self.run_session(self.repo, "now")
+        git(self.repo, "checkout", "-q", "main")
+        self.commit(self.repo, "Teammate one\n\nT1.", {"t1.txt": "1\n"})
+        self.commit(self.repo, "Teammate two\n\nT2.", {"t2.txt": "2\n"})
+        git(self.repo, "checkout", "-q", "feat/fix")
+        git(self.repo, "merge", "-q", "--no-edit", "main")
+        self.run_session(self.repo, "now")
+        self.assertNotIn("Teammate one", self.logged())
+        self.records()
+        subjects = [s for s, _ in self.kinds(self.evidence())]
+        self.assertNotIn("Teammate one", subjects)
+        self.assertNotIn("Teammate two", subjects)
+
+    def test_rebase_in_a_later_leg_counts_each_commit_once(self):
+        self.start({"app.py": "x = 1\n"})
+        self.commit(self.repo, "Leg one work\n\nL1.", {"f.py": "f = 1\n"})
+        self.run_session(self.repo, "now")
+        self.records()
+        self.append_journal(self.fdir, "handoff", "Done.")
+        self.run_session(self.repo, "publish")
+        self.run_session(self.repo, "start")
+        self.commit(self.repo, "Leg two work\n\nL2.", {"g.py": "g = 1\n"})
+        self.run_session(self.repo, "now")
+        git(self.repo, "checkout", "-q", "main")
+        self.commit(self.repo, "Teammate change\n\nT.", {"t.txt": "t\n"})
+        git(self.repo, "checkout", "-q", "feat/fix")
+        git(self.repo, "rebase", "-q", "main")
+        out = self.run_session(self.repo, "now")
+        self.assertNotIn("Logged", out)  # rebased copies of logged work, and main's commit, aren't new
+        ev = self.evidence()
+        self.assertEqual(sorted(self.kinds(ev)), [("Leg one work", "agent"), ("Leg two work", "agent")])
+        self.assertEqual(ev["stats"]["agent_commits"], 2)
+        leg_one = [leg for leg in ev["legs"] if leg["leg_id"] == "leg-01"][0]
+        head_shas = set(git(self.repo, "rev-list", "HEAD").split())
+        self.assertTrue(set(leg_one["commits"]) <= head_shas, "leg one should list the rebased copy")
+
+    def test_branch_with_no_commits_at_start(self):
+        repo = self.tmp / "empty"
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        self.repo = repo
+        self.pid = self.init_project(repo)
+        self.feature = "main"
+        self.fdir = self.feature_dir(self.pid, "main")
+        self.run_session(repo, "start")
+        for i in range(3):
+            self.commit(repo, f"Commit {i}\n\nBody.", {f"f{i}.py": f"v = {i}\n"})
+        self.assertIn("Logged 3 commits", self.run_session(repo, "now"))
+        self.records()
+        ev = self.evidence()
+        self.assertEqual(len(ev["commits"]), 3)
+        self.assertEqual(len(ev["files"]), 3)
+
+    def test_feature_closed_on_the_default_branch_ignores_later_commits(self):
+        self.feature = "main"
+        self.start({"app.py": "x = 1\n"}, branch="main-work")
+        git(self.repo, "checkout", "-q", "main")
+        self.fdir = self.feature_dir(self.pid, "main")
+        self.run_session(self.repo, "start")
+        self.commit(self.repo, "On main\n\nM.", {"m.py": "m = 1\n"})
+        self.run_session(self.repo, "now")
+        self.records()
+        self.append_journal(self.fdir, "handoff", "Done.")
+        self.run_session(self.repo, "publish")
+        self.commit(self.repo, "Someone else later\n\nS.", {"s.py": "s = 1\n"})
+        ev = self.evidence()
+        self.assertEqual(ev["pending_commits"], [])
+        self.assertEqual([c["subject"] for c in ev["commits"]], ["On main"])
+
 
 class TestRunTests(EvidenceFixture):
     def run_with(self, claim, *argv):

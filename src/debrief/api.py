@@ -198,7 +198,7 @@ class Api:
                                                                "tests", "whitespace_only")}
                                       | {"claims": h.get("claims", [])} for h in f["hunks"]]}
                          for f in ev_files]
-        evidence = {k: ev.get(k) for k in ("computed_at", "repo_available", "branch", "base", "effective_base", "head",
+        evidence = {k: ev.get(k) for k in ("computed_at", "computed_on", "repo_available", "branch", "base", "effective_base", "head",
                                            "head_commit", "coverage", "stats", "tests", "critical_paths", "queue",
                                            "anchors", "commits", "legs", "pending_commits", "note", "patch")}
         evidence["files"] = summary_files
