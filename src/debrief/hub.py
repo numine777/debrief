@@ -269,12 +269,23 @@ class HubApp(ReviewApp):
         self.secure = secure
         self.sessions: Dict[str, dict] = {}
         self.failures: Dict[str, List[float]] = {}
+        self._guard = threading.Lock()
         api = Api(hub.archive_root, mode="hub")
+        self.hostnames = list(hostnames or [])
+        super().__init__(api, port, self._hosts(port))
+
+    def _hosts(self, port: int) -> List[str]:
+        """The configured names, and loopback for an admin on the hub itself; never any Host
+        (that would reopen DNS rebinding)."""
         hosts = []
-        for name in hostnames or []:
+        for name in self.hostnames + list(LOOPBACK_NAMES):
             hosts += [name, f"{name}:{port}"]
-        super().__init__(api, port, hosts or None)
-        self.any_host = not hostnames
+        return hosts
+
+    def bind_port(self, port: int) -> None:
+        """Call once the listening port is known (port 0 picks a free one)."""
+        self.port = port
+        self.allowed_hosts = set(self._hosts(port))
 
     def extend_routes(self, F: str) -> None:
         super().extend_routes(F)
@@ -286,20 +297,67 @@ class HubApp(ReviewApp):
     def _session_user(self, req: Request) -> Optional[dict]:
         auth = req.headers.get("authorization", "")
         if auth.lower().startswith("bearer "):
-            return self.hub.authenticate(auth[7:].strip())
+            return self._check_token(req, auth[7:].strip())
         cookies = req.headers.get("cookie", "")
         for part in cookies.split(";"):
             name, _, value = part.strip().partition("=")
             if name == COOKIE and value:
-                session = self.sessions.get(value)
-                if session and session["expires"] > time.time():
-                    return session["user"]
+                with self._guard:
+                    session = self.sessions.get(value)
+                if not session or session["expires"] <= time.time():
+                    continue
+                # Re-checked on every request: a revoked token or a removed user ends the session.
+                user = self.hub.session_user(session["user"]["name"], session["user"].get("token_id"))
+                if user is None:
+                    with self._guard:
+                        self.sessions.pop(value, None)
+                    continue
+                return user
+        return None
+
+    # --- failed attempts ---------------------------------------------------------------------------
+
+    def _recent_failures(self, client: str) -> List[float]:
+        cutoff = time.time() - FAILURE_WINDOW
+        with self._guard:
+            recent = [t for t in self.failures.get(client, []) if t > cutoff]
+            if recent:
+                self.failures[client] = recent
+            else:
+                self.failures.pop(client, None)
+            return recent
+
+    def _record_failure(self, client: str) -> int:
+        now = time.time()
+        with self._guard:
+            if len(self.failures) > 10000:  # forget stale clients instead of growing without bound
+                cutoff = now - FAILURE_WINDOW
+                self.failures = {c: ts for c, ts in self.failures.items() if ts and ts[-1] > cutoff}
+            recent = [t for t in self.failures.get(client, []) if t > now - FAILURE_WINDOW] + [now]
+            self.failures[client] = recent
+        return len(recent)
+
+    def _check_token(self, req: Request, token: str) -> Optional[dict]:
+        """Authenticate a token. A valid token always succeeds; invalid ones are slowed and counted.
+
+        Tokens carry 256 random bits, so guessing is hopeless; the throttle
+        keeps a scanner from burning CPU and logs, and never locks out a
+        teammate who shares the scanner's address.
+        """
+        user = self.hub.authenticate(token)
+        if user is not None:
+            return user
+        count = self._record_failure(req.client)
+        time.sleep(0.3 if count <= FAILURE_LIMIT else 1.0)
         return None
 
     def check_request(self, req: Request) -> Optional[Response]:
-        if not self.any_host and req.headers.get("host", "") not in self.allowed_hosts:
+        if req.headers.get("host", "") not in self.allowed_hosts:
             return Response.error(421, "this hub answers only for its configured host names")
         req.user = self._session_user(req)
+        if req.user is None and req.headers.get("authorization", "").lower().startswith("bearer ") \
+                and len(self._recent_failures(req.client)) > FAILURE_LIMIT:
+            return Response.error(429, "too many failed sign-ins from this address; wait ten minutes")
         if req.method in ("POST", "PATCH", "PUT", "DELETE"):
             if req.headers.get("x-debrief") != "1":
                 return Response.error(403, "missing X-Debrief header")
@@ -334,36 +392,38 @@ class HubApp(ReviewApp):
     # --- sign-in ---------------------------------------------------------------------------------
 
     def post_login(self, req: Request) -> Response:
-        recent = [t for t in self.failures.get(req.client, []) if t > time.time() - 600]
-        if len(recent) >= 10:
-            return Response.error(429, "too many failed sign-ins; wait ten minutes")
-        token = str(req.json_body().get("token") or "").strip()
-        user = self.hub.authenticate(token)
+        token = req.json_body().get("token")
+        user = self._check_token(req, token.strip() if isinstance(token, str) else "")
         if user is None:
-            recent.append(time.time())
-            self.failures[req.client] = recent
-            time.sleep(0.3)
+            if len(self._recent_failures(req.client)) > FAILURE_LIMIT:
+                return Response.error(429, "too many failed sign-ins from this address; wait ten minutes")
             return Response.error(401, "that token isn't valid")
         sid = secrets.token_urlsafe(32)
-        self.sessions[sid] = {"user": user, "expires": time.time() + SESSION_SECONDS}
+        now = time.time()
+        with self._guard:
+            self.sessions = {k: s for k, s in self.sessions.items() if s["expires"] > now}
+            self.sessions[sid] = {"user": user, "expires": now + SESSION_SECONDS}
         cookie = f"{COOKIE}={sid}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_SECONDS}"
         if self.secure:
             cookie += "; Secure"
-        return Response(200, b'{"user":' + util_json(user) + b"}", "application/json; charset=utf-8",
+        public = {"name": user["name"], "admin": user["admin"]}
+        return Response(200, b'{"user":' + util_json(public) + b"}", "application/json; charset=utf-8",
                         {"Set-Cookie": cookie, "Cache-Control": "no-store"})
 
     def post_logout(self, req: Request) -> Response:
         for part in req.headers.get("cookie", "").split(";"):
             name, _, value = part.strip().partition("=")
             if name == COOKIE:
-                self.sessions.pop(value, None)
+                with self._guard:
+                    self.sessions.pop(value, None)
         return Response(200, b'{"signed_out":true}', "application/json; charset=utf-8",
                         {"Set-Cookie": f"{COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"})
 
     # --- views with access control ------------------------------------------------------------
 
     def get_meta(self, req: Request) -> Response:
-        meta = self.api.meta(req.user)
+        user = {"name": req.user["name"], "admin": req.user["admin"]} if req.user else None
+        meta = self.api.meta(user)
         meta.update(generation=self.generation, review=True, hub=True, version=__version__)
         return Response.json(meta)
 
@@ -544,7 +604,9 @@ def make_hub_server(hub: Hub, bind: str, port: int, cert: Optional[str], key: Op
         context.load_cert_chain(cert, key)
     app = HubApp(hub, port, hostnames, secure=secure)
     _rewire_routes(app)
-    return HubServer((bind, port), app, context)
+    server = HubServer((bind, port), app, context)
+    app.bind_port(server.server_address[1])
+    return server
 
 
 def cli(args) -> int:
@@ -612,7 +674,9 @@ def cli(args) -> int:
             syncer = HubSyncer(hub, server.app)
             threading.Thread(target=syncer.run, name="hub-sync", daemon=True).start()
             scheme = "http" if args.insecure_http else "https"
-            print(f"Debrief Hub {__version__} serving {hub.archive_root} at {scheme}://{bind}:{port}/")
+            name = (cfg.get("hostnames") or ["localhost"])[0]
+            print(f"Debrief Hub {__version__} serving {hub.archive_root} at {scheme}://{name}:{port}/ "
+                  f"(listening on {bind}:{port})")
             print("Sign in with an access token from `debrief hub adduser`. The hub makes no outbound connections.")
             try:
                 server.serve_forever(poll_interval=0.5)

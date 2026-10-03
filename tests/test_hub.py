@@ -109,10 +109,31 @@ class HubTests(IsolatedTestCase):
                                        b'{"hunk_id": "x"}'))
         self.assertEqual(resp.status, 403)
 
-    def test_failed_sign_ins_are_rate_limited(self):
-        for _ in range(10):
-            call(self.app, "POST", "/api/v1/login", {"token": "dbh_bad"})
-        self.assertEqual(call(self.app, "POST", "/api/v1/login", {"token": self.alice})[0].status, 429)
+    def test_failed_sign_ins_are_throttled_without_locking_out_valid_tokens(self):
+        with mock.patch("debrief.hub.time.sleep") as slept:
+            for _ in range(5):
+                call(self.app, "POST", "/api/v1/login", {"token": "dbh_bad"})
+            for _ in range(5):  # bearer guesses count too
+                self.assertEqual(call(self.app, "GET", "/api/v1/index", token="dbh_bad")[0].status, 401)
+            self.assertEqual(slept.call_count, 10)  # each failure is slowed; ten are allowed
+            self.assertEqual(call(self.app, "POST", "/api/v1/login", {"token": "dbh_bad"})[0].status, 429)
+            self.assertEqual(call(self.app, "GET", "/api/v1/index", token="dbh_bad")[0].status, 429)
+            # A teammate behind the same address still gets in.
+            self.assertEqual(call(self.app, "POST", "/api/v1/login", {"token": self.alice})[0].status, 200)
+            self.assertEqual(call(self.app, "GET", "/api/v1/index", token=self.alice)[0].status, 200)
+            # Malformed tokens are refused, not crashed on.
+            self.assertEqual(call(self.app, "POST", "/api/v1/login", {"token": ["dbh_x"]})[0].status, 429)
+
+    def test_revoking_tokens_ends_signed_in_sessions(self):
+        self.hub.grant("carol", self.pid, "reader")
+        session = self.login(self.carol)
+        self.assertEqual(call(self.app, "GET", self.base, cookie=session)[0].status, 200)
+        self.hub.revoke_tokens("carol")
+        self.assertEqual(call(self.app, "GET", self.base, cookie=session)[0].status, 401)
+        self.assertIsNone(call(self.app, "GET", "/api/v1/meta", cookie=session)[1]["user"])
+        # A new token signs in again; meta never exposes token ids.
+        session = self.login(self.hub.new_token("carol"))
+        self.assertEqual(call(self.app, "GET", "/api/v1/meta", cookie=session)[1]["user"], {"name": "carol", "admin": False})
 
     def test_admin_writes_survive_concurrent_sign_ins(self):
         # Force a last_used stamp on every authentication, the worst case for lost updates.
@@ -136,6 +157,11 @@ class HubTests(IsolatedTestCase):
                 for w in workers:
                     w.join()
         self.assertEqual(len(self.hub.users()["alice"]["tokens"]), 16)
+
+    def test_host_check_never_answers_any_host(self):
+        app = HubApp(self.hub, 7320, [], secure=True)
+        self.assertEqual(call(app, "GET", "/api/v1/meta", host="evil.example")[0].status, 421)
+        self.assertEqual(call(app, "GET", "/api/v1/meta", host="localhost:7320")[0].status, 200)
 
     def test_comment_permissions(self):
         self.hub.grant("bob", self.pid, "reviewer")
