@@ -153,6 +153,19 @@ class ArchiveSyncTests(IsolatedTestCase):
         self.assertEqual(copies[0].read_text(), "from a\n")
         self.assertIn("features/f/brief.md", (self.b / "conflicts.json").read_text())
 
+    def test_independently_initialized_archives_merge(self):
+        other = self.tmp / "c" / "proj"
+        archive.ensure_repo(other)
+        util.write_json(other / "project.json", {"project_id": "proj", "created_at": "2020-01-01T00:00:00Z"})
+        archive.commit(other, "Register on host c")
+        archive.set_remote(other, str(self.remote))
+        result = archive.sync(other, "C")
+        self.assertTrue(result["pulled"], result)
+        self.assertTrue(result["pushed"], result)
+        merged = json.loads((other / "project.json").read_text())
+        self.assertEqual(merged["created_at"], "2020-01-01T00:00:00Z")
+        self.assertFalse(list(other.glob("project.json.conflict-*")))
+
     def test_pull_into_empty_archive(self):
         empty = self.tmp / "c" / "proj"
         archive.ensure_repo(empty)

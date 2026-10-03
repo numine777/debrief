@@ -110,6 +110,12 @@ def _merge_json_records(path: str, ours: Optional[bytes], theirs: Optional[bytes
         merged = a if b is None else b
         return (json.dumps(merged, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
     name = Path(path).name
+    if path == "project.json" and isinstance(a, dict) and isinstance(b, dict):
+        # Two hosts registered the same project: keep the earliest registration.
+        merged = dict(b)
+        merged.update(a)
+        merged["created_at"] = min(x for x in (a.get("created_at"), b.get("created_at"), "9999") if x)
+        return (json.dumps(merged, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
     if name == "comments.json" and isinstance(a, dict) and isinstance(b, dict):
         by_id: Dict[str, dict] = {}
         for item in (a.get("comments") or []) + (b.get("comments") or []):
@@ -189,7 +195,9 @@ def pull(project_dir: Path, cfg: Optional[Config] = None) -> dict:
         if not gitutil.head(project_dir):
             _git(project_dir, ["reset", "-q", "--hard", remote_ref])
             return {"pulled": True, "conflicts": []}
-        _git(project_dir, ["merge", "--no-edit", "-q", remote_ref], check=False)
+        # A second host's archive starts with its own root commit (debrief init),
+        # so histories may be unrelated the first time they meet.
+        _git(project_dir, ["merge", "--no-edit", "-q", "--allow-unrelated-histories", remote_ref], check=False)
         unmerged = gitutil.run(["diff", "--name-only", "--diff-filter=U"], project_dir).split()
         if unmerged:
             kept = _resolve_conflicts(project_dir)
