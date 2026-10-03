@@ -5,14 +5,16 @@ import os
 import shutil
 import ssl
 import subprocess
+import sys
 import threading
 import time
 import unittest
 import urllib.request
+from unittest import mock
 
-from tests.helpers import IsolatedTestCase, git
+from tests.helpers import ROOT, IsolatedTestCase, git
 
-from debrief import archive, comments, ingest, paths, records
+from debrief import archive, comments, index, ingest, paths, records
 from debrief.api import BadRequest
 from debrief.hub import Hub, HubApp, HubSyncer, _rewire_routes, make_hub_server
 from debrief.server import Request
@@ -161,11 +163,9 @@ class HubTests(IsolatedTestCase):
         resp, data = call(self.app, "POST", f"{self.base}/close-request", {}, cookie=alice)
         self.assertEqual(data["leg_id"], "leg-01")
         # Hub writes reach the bare repository (background sync, then the syncer as a fallback).
-        deadline = time.time() + 10
         clone = paths.project_dir(self.pid, self.hub.archive_root)
-        while time.time() < deadline and git(clone, "status", "--porcelain", "--branch").find("ahead") >= 0:
-            time.sleep(0.2)
         self.syncer.tick()
+        self.assertFalse(archive.unpushed(clone))
         # The developer's next session pulls them in and bin/session relays them.
         out = self.run_session(self.repo, "start")
         self.assertIn("REQUEST from alice: close out leg-01", out)

@@ -220,6 +220,22 @@ def push(project_dir: Path, cfg: Optional[Config] = None) -> dict:
     return {"pushed": True}
 
 
+def unpushed(project_dir: Path) -> bool:
+    """Whether the archive has commits its remote doesn't (as of the last fetch or push).
+
+    Pushes name the branch explicitly and set no upstream, so ``git status``
+    never says "ahead"; compare with the remote-tracking ref instead.
+    """
+    project_dir = Path(project_dir)
+    if not remote_url(project_dir) or not gitutil.head(project_dir):
+        return False
+    remote_ref = f"refs/remotes/origin/{_branch(project_dir)}"
+    if not gitutil.try_run(["rev-parse", "--verify", "-q", remote_ref], project_dir):
+        return True
+    count = gitutil.try_run(["rev-list", "--count", f"{remote_ref}..HEAD"], project_dir) or "0"
+    return count.strip() != "0"
+
+
 def sync(project_dir: Path, message: str = "Sync records", cfg: Optional[Config] = None) -> dict:
     """Commit local changes, pull (merging), and push."""
     cfg = cfg or load_config()

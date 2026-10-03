@@ -450,7 +450,7 @@ class HubSyncer:
         for pid in self.hub.repo_projects():
             refs = gitutil.refs(self.hub.repo_path(pid))
             clone = self.hub.ensure_clone(pid)
-            if refs == self.seen.get(pid) and not self._clone_ahead(clone):
+            if refs == self.seen.get(pid) and not archive.unpushed(clone):
                 continue
             self.seen[pid] = refs
             try:
@@ -468,11 +468,6 @@ class HubSyncer:
         if updated and self.app is not None:
             self.app.generation += 1
         return updated
-
-    @staticmethod
-    def _clone_ahead(clone: Path) -> bool:
-        out = gitutil.try_run(["status", "--porcelain", "--branch"], clone) or ""
-        return "ahead" in out.splitlines()[0] if out else False
 
     def run(self) -> None:
         while not self.stop_event.is_set():

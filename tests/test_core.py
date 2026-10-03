@@ -166,6 +166,17 @@ class ArchiveSyncTests(IsolatedTestCase):
         self.assertEqual(merged["created_at"], "2020-01-01T00:00:00Z")
         self.assertFalse(list(other.glob("project.json.conflict-*")))
 
+    def test_unpushed_commits_are_detected(self):
+        self.assertFalse(archive.unpushed(self.a))
+        util.write_json(self.a / "features" / "f" / "comments.json", {"comments": []})
+        archive.commit(self.a, "Local only")
+        self.assertTrue(archive.unpushed(self.a))
+        archive.sync(self.a, "Push")
+        self.assertFalse(archive.unpushed(self.a))
+        lonely = self.tmp / "c" / "proj"
+        archive.ensure_repo(lonely)
+        self.assertFalse(archive.unpushed(lonely))
+
     def test_pull_into_empty_archive(self):
         empty = self.tmp / "c" / "proj"
         archive.ensure_repo(empty)
