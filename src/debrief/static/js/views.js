@@ -497,23 +497,34 @@
     return h("span", null, `${ok} of ${statuses.length} verified`, fail ? h("span", { class: "ts-verified_fail" }, `, ${fail} failing`) : null);
   }
 
+  // Tables that turn into one card per row on a phone. Each cell carries its column's name so the
+  // card can label it, and explicit roles keep the table semantics once CSS stops laying out a table.
+  function cardTable(cls, headings, rows) {
+    const table = h("table", { class: ["grid", "cards", cls], role: "table" },
+      h("thead", { role: "rowgroup" }, h("tr", { role: "row" }, headings.map((t) => h("th", { role: "columnheader" }, t)))),
+      h("tbody", { role: "rowgroup" }, rows));
+    for (const tr of table.tBodies[0].rows) {
+      tr.setAttribute("role", "row");
+      for (const td of tr.cells) td.setAttribute("role", "cell");
+    }
+    return table;
+  }
+
   async function viewSystems(root, feature) {
     if (!feature.systems.length) return viewMap(root, feature);
     const base = fpath(feature.project.project_id, feature.feature_id);
     const rows = feature.systems.map((s) => {
       const untested = s.critical_paths.filter((cp) => cp.status === "untested").length;
       return h("tr", null,
-        h("td", null, h("a", { href: `${base}/system/${enc(s.id)}` }, h("strong", null, s.title)), h("div", { class: "mono muted small" }, s.id)),
-        h("td", null, s.change || ""),
-        h("td", { class: "num" }, String(s.files.length)),
-        h("td", { class: "num" }, String(s.lines_changed)),
-        h("td", null, s.critical_paths.length ? `${s.critical_paths.length}${untested ? `, ${untested} untested` : ""}` : h("span", { class: "muted" }, "none")),
-        h("td", null, testSummary(s.test_statuses)),
-        h("td", { class: "num" }, s.issues.length ? h("span", { class: "ts-claimed_only" }, String(s.issues.length)) : ""));
+        h("td", { class: "lead" }, h("a", { href: `${base}/system/${enc(s.id)}` }, h("strong", null, s.title)), h("div", { class: "mono muted small" }, s.id)),
+        h("td", { "data-label": "Change" }, s.change || ""),
+        h("td", { class: "num", "data-label": "Files" }, String(s.files.length)),
+        h("td", { class: "num", "data-label": "Lines" }, String(s.lines_changed)),
+        h("td", { "data-label": "Critical paths" }, s.critical_paths.length ? `${s.critical_paths.length}${untested ? `, ${untested} untested` : ""}` : h("span", { class: "muted" }, "none")),
+        h("td", { "data-label": "Tests" }, testSummary(s.test_statuses)),
+        h("td", { class: "num", "data-label": "Issues" }, s.issues.length ? h("span", { class: "ts-claimed_only" }, String(s.issues.length)) : ""));
     });
-    root.appendChild(h("table", { class: "grid" },
-      h("thead", null, h("tr", null, ["System", "Change", "Files", "Lines", "Critical paths", "Tests", "Issues"].map((t) => h("th", null, t)))),
-      h("tbody", null, rows)));
+    root.appendChild(cardTable("systems-table", ["System", "Change", "Files", "Lines", "Critical paths", "Tests", "Issues"], rows));
   }
 
   async function viewSystem(root, feature, route) {
@@ -639,9 +650,8 @@
         const [sid] = v.split("/");
         return h("a", { class: "chip system", href: `${base}/system/${enc(sid)}${v.includes("/") ? "?cp=" + enc(v.split("/")[1]) : ""}` }, v);
       };
-      root.appendChild(h("table", { class: "grid" },
-        h("thead", null, h("tr", null, ["Evidence", "Test", "What it proves", "Validates", "Command", "Last run"].map((t) => h("th", null, t)))),
-        h("tbody", null, feature.tests.tests.map((t) => {
+      root.appendChild(cardTable("tests-table", ["Evidence", "Test", "What it proves", "Validates", "Command", "Last run"],
+        feature.tests.tests.map((t) => {
           const ev = evTests[t.id] || {};
           const last = (ev.runs || [])[ev.runs ? ev.runs.length - 1 : 0];
           return h("tr", null,
@@ -649,11 +659,11 @@
               ? h("div", { class: "small muted" }, `claimed ${String(t.claimed_result).replace("_", " ")}`) : null),
             h("td", null, h("span", { class: "mono small tid" }, t.id), h("div", { class: "small muted" }, t.kind || "")),
             h("td", { class: "claim" }, t.claim),
-            h("td", null, h("div", { class: "chips" }, t.validates.map(targetLink))),
-            h("td", null, h("code", null, t.command || "")),
-            h("td", { class: "small" }, last ? h("span", null, last.exit_code === 0 ? "passed" : `exit ${last.exit_code}`, h("div", { class: "muted" }, ago(last.started_at)),
+            h("td", { class: "validates", "data-label": "Validates" }, h("div", { class: "chips" }, t.validates.map(targetLink))),
+            h("td", { class: "command", "data-label": "Command" }, h("code", null, t.command || "")),
+            h("td", { class: "small", "data-label": "Last run" }, last ? h("span", null, last.exit_code === 0 ? "passed" : `exit ${last.exit_code}`, h("div", { class: "muted" }, ago(last.started_at)),
               ev.current ? null : h("div", { class: "muted" }, "at an older commit")) : h("span", { class: "muted" }, "none recorded")));
-        }))));
+        })));
       const gaps = feature.tests.gaps || [];
       root.appendChild(sectionTitle("Known gaps", gaps.length ? plural(gaps.length, "gap") : "the agent listed none"));
       if (gaps.length) {

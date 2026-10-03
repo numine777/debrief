@@ -282,6 +282,25 @@ class PhoneLayoutTests(IsolatedTestCase):
             self.assertLess(wide.locator(".tabs-bar").bounding_box()["y"], 0)
             self.assertEqual(page.errors + wide.errors, [])
 
+    def test_tables_become_labelled_cards(self):
+        with sync_playwright() as p:
+            page = self.open(p, self.feature + "/tests", "table.tests-table")
+            self.assertFalse(page.locator("table.tests-table thead").is_visible())
+            claim = page.locator("table.tests-table td.claim").first
+            self.assertGreater(claim.bounding_box()["width"], 300)  # not squeezed into a column
+            self.assertEqual(page.locator("table.tests-table td.command").get_attribute("data-label"), "Command")
+            # The rows keep their table semantics once CSS stops laying them out as a table.
+            self.assertEqual(page.get_by_role("row").count(), 1)
+            self.assertEqual(page.get_by_role("cell").count(), 6)
+            page.goto(self.base + self.feature + "/systems")
+            page.locator("table.systems-table").wait_for()
+            self.assertFalse(page.locator("table.systems-table thead").is_visible())
+            self.assertEqual(page.locator("table.systems-table tbody tr").count(), 2)
+            wide = self.open(p, self.feature + "/tests", "table.tests-table", viewport={"width": 1280, "height": 800},
+                             is_mobile=False, has_touch=False)
+            self.assertTrue(wide.locator("table.tests-table thead").is_visible())
+            self.assertEqual(page.errors + wide.errors, [])
+
     def test_search_and_help_suit_the_screen(self):
         with sync_playwright() as p:
             page = self.open(p, self.feature, ".feature-head")

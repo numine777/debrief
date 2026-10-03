@@ -578,6 +578,23 @@ kbd { font-family: var(--font-code); font-size: var(--s-12); border: 1px solid v
 @media (max-width: 760px) {
   .outline { display: none; }
 }
+/* Below 900 px a claim column would shrink to a word per line: card tables put each row on its
+   own sheet instead, every cell labelled with its column's name. */
+@media (max-width: 900px) {
+  table.grid.cards { display: block; overflow: visible; border: 0; background: none; font-size: var(--s-14); }
+  table.grid.cards thead { display: none; }
+  table.grid.cards tbody { display: block; }
+  table.grid.cards tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem 1.1rem; background: var(--sheet);
+    border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.65rem 0.8rem; margin-bottom: 0.6rem; box-shadow: var(--shadow); }
+  table.grid.cards td { display: block; padding: 0; border: 0; max-width: none; }
+  table.grid.cards td:empty { display: none; }
+  table.grid.cards td[data-label]::before { content: attr(data-label); margin-right: 0.4em; color: var(--ink-3); font-size: var(--s-13); }
+  table.grid.cards td.lead, table.grid.cards td.claim, table.grid.cards td.validates, table.grid.cards td.command { flex-basis: 100%; }
+  table.grid.cards td.validates::before { display: block; margin-bottom: 0.2rem; }
+  table.grid.cards td.claim { font-size: var(--s-16); line-height: 1.5; max-width: 70ch; }
+  table.grid.cards td.command code { overflow-wrap: anywhere; }
+  table.grid.cards td[data-label="Last run"] div { display: inline; margin-left: 0.4em; }
+}
 @media (max-width: 640px) {
   :root { --gutter: 1rem; }
   /* The tab bar, not the top bar, stays on screen: it is how a phone moves between views. */
