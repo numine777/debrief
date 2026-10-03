@@ -209,6 +209,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--key")
     p.add_argument("--role", choices=["owner", "reviewer", "reader"])
     p.add_argument("--insecure-http", action="store_true", help="serve without TLS (testing only)")
+    p.add_argument("--admin", action="store_true", help="with adduser: the user can see every project")
     p.set_defaults(func=cmd_hub)
 
     p = sub.add_parser("sync", help="commit, pull and push project archives")
