@@ -95,6 +95,73 @@ class ViewerSmokeTests(IsolatedTestCase):
         unexpected = [e for e in errors if "example.com" not in e and "Content Security Policy" not in e]
         self.assertEqual(unexpected, [])
 
+    def test_review_loop_in_the_browser(self):
+        base = f"http://127.0.0.1:{self.port}/"
+        feature = f"#/p/{self.pid}/f/feat--ui"
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            errors = []
+            page.on("pageerror", lambda err: errors.append(str(err)))
+            page.goto(base + feature + "/diff?mode=systems")
+            page.locator(".hunk").first.wait_for()
+            # Comment on a changed line.
+            page.locator(".file", has_text="app.py").locator("tr.add .ln-btn").first.click()
+            page.locator(".composer textarea").fill("Why loop forever here?")
+            page.locator(".composer button[type=submit]").click()
+            page.locator(".comment-row", has_text="Why loop forever here?").wait_for()
+            # Mark a hunk reviewed; the strip cell shows it.
+            page.locator(".mark-btn").first.click()
+            page.locator(".mark-btn[aria-pressed=true]").first.wait_for()
+            page.locator(".strip .cell.reviewed").first.wait_for()
+            # Generate a prompt from the comment.
+            page.goto(base + feature + "/comments")
+            page.locator(".comment-item", has_text="Why loop forever here?").wait_for()
+            page.locator("button", has_text="Generate prompt").click()
+            dialog = page.locator("dialog[open]")
+            dialog.wait_for()
+            text = dialog.locator("textarea").input_value()
+            self.assertIn("app.py:2", text)
+            self.assertIn("Why loop forever here?", text)
+            dialog.locator("button", has_text="Queue for the agent").click()
+            dialog.locator("text=Queued in feedback.md").wait_for()
+            dialog.locator("button", has_text="Close").last.click()
+            # Ask the agent to close the leg.
+            page.goto(base + feature)
+            page.locator("button", has_text="Close leg-01").click()
+            page.locator(".prompt-text").wait_for()
+            self.assertIn("ai-session-closeout", page.locator(".prompt-text").input_value())
+            browser.close()
+        self.assertTrue((self.feature_dir(self.pid, "feat--ui") / "feedback.md").exists())
+        self.assertEqual(errors, [])
+
+    def test_export_opens_offline(self):
+        from debrief import export
+        from debrief.api import Api
+
+        out = self.tmp / "export.html"
+        out.write_text(export.render(Api(self.archive), self.pid, "feat--ui"))
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            errors, requests = [], []
+            page.on("pageerror", lambda err: errors.append(str(err)))
+            page.on("console", lambda msg: errors.append(msg.text) if msg.type == "error" else None)
+            page.on("request", lambda r: requests.append(r.url) if not r.url.startswith(("file:", "data:")) else None)
+            page.goto(out.as_uri())
+            page.locator("main", has_text="Intent").wait_for()
+            page.goto(out.as_uri() + f"#/p/{self.pid}/f/feat--ui/diff?mode=story")
+            page.locator(".hunk").first.wait_for()
+            self.assertIn("read-only", page.inner_text("header"))
+            browser.close()
+        unexpected = [e for e in errors if "example.com" not in e and "Content Security Policy" not in e]
+        self.assertEqual(unexpected, [])
+        self.assertEqual(requests, [])
+
+    def _unused(self):
+        unexpected = [e for e in errors if "example.com" not in e and "Content Security Policy" not in e]
+        self.assertEqual(unexpected, [])
+
 
 if __name__ == "__main__":
     unittest.main()
