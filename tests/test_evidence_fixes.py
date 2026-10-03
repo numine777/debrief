@@ -313,6 +313,39 @@ class TestRunTests(EvidenceFixture):
                                              f"command: {json.dumps(claim)}, claimed_result: pass}}\ngaps: []\n")
         return self.evidence()["tests"][0]
 
+    def test_argv_runs_match_their_claim_text(self):
+        test = self.run_with("python3 -c \"print('a b')\"", "python3", "-c", "print('a b')")
+        self.assertEqual(test["status"], "verified_pass")
+
+    def test_a_longer_command_does_not_verify_a_shorter_claim(self):
+        # The old matcher took "echo test-lint" (or any run starting "echo test ") as a run of "echo test".
+        test = self.run_with("echo test", "echo test-lint")
+        self.assertEqual(test["status"], "claimed_only")
+
+    def test_extra_arguments_do_not_verify_a_claim(self):
+        test = self.run_with("true", "true --version")
+        self.assertEqual(test["status"], "claimed_only")
+
+    def test_quiet_flags_do_not_matter(self):
+        test = self.run_with("true", "true -q")
+        self.assertEqual(test["status"], "verified_pass")
+
+    def test_a_run_before_committing_is_current(self):
+        self.start({"app.py": "x = 1\n"})
+        self.write(self.repo / "app.py", "x = 2\n")
+        self.write(self.repo / "new.py", "n = 1\n")
+        self.run_session(self.repo, "run", "true")
+        self.commit(self.repo, "Commit what was tested\n\nT.")
+        self.run_session(self.repo, "now")
+        self.records()
+        self.write(self.fdir / "tests.yaml", "tests:\n  - {id: t, validates: [x], claim: c, kind: unit, command: 'true', "
+                                             "claimed_result: pass}\ngaps: []\n")
+        self.assertTrue(self.evidence()["tests"][0]["current"])
+        self.commit(self.repo, "Change after the run\n\nU.", {"app.py": "x = 3\n"})
+        self.run_session(self.repo, "now")
+        self.assertFalse(self.evidence()["tests"][0]["current"])
+
+
 class RuleTests(unittest.TestCase):
     def fired(self, line, path="svc/client.py"):
         from debrief import diffparse

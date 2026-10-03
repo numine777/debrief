@@ -304,7 +304,11 @@ def untracked(path: Path | str) -> List[str]:
 
 
 def status_porcelain(path: Path | str) -> List[Tuple[str, str]]:
-    out = try_run(["status", "--porcelain=v1", "-z", "--untracked-files=all"], path) or ""
+    # Not try_run: stripping would eat the leading space of the first entry's status (" M path").
+    try:
+        out = run(["status", "--porcelain=v1", "-z", "--untracked-files=all"], path)
+    except (GitError, FileNotFoundError, NotADirectoryError):
+        out = ""
     entries: List[Tuple[str, str]] = []
     items = out.split("\x00")
     i = 0
@@ -368,6 +372,27 @@ def worktrees(path: Path | str) -> List[dict]:
     if current:
         trees.append(current)
     return trees
+
+
+def hash_files(path: Path | str, files: Sequence[str]) -> Dict[str, Optional[str]]:
+    """Blob ids of working-tree files, computed without writing anything into the repository."""
+    out: Dict[str, Optional[str]] = {}
+    present = [f for f in files if (Path(path) / f).is_file()]
+    for f in files:
+        out[f] = None
+    if present:
+        try:
+            ids = run(["hash-object", "--no-filters", "--stdin-paths"], path, input_text="\n".join(present) + "\n").split()
+        except GitError:
+            return out
+        out.update(dict(zip(present, ids)))
+    return out
+
+
+def changed_paths(path: Path | str, base: str, head_rev: str) -> List[str]:
+    """Every path whose content differs between two commits, renames as delete plus add."""
+    out = try_run(["diff", "--name-only", "--no-renames", "--no-ext-diff", "-z", base, head_rev], path) or ""
+    return [p for p in out.split("\x00") if p]
 
 
 def name_status(path: Path | str, base: str, head_rev: Optional[str] = None) -> List[Tuple[str, str]]:

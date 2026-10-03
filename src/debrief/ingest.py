@@ -676,8 +676,15 @@ class FeatureIngest:
         }
 
     @staticmethod
-    def _norm_cmd(cmd: str) -> str:
-        return " ".join((cmd or "").replace("\\\n", " ").split())
+    def _coverage(units: List[dict]) -> dict:
+        counts = {"covered": 0, "incidental": 0, "weak": 0, "unclaimed": 0}
+        for unit in units:
+            counts[unit["state"]] += 1
+        total = len(units)
+        explained = counts["covered"] + counts["incidental"]
+        return dict(counts, units=total, ratio=(round(explained / total, 4) if total else None))
+
+    # --- tests -----------------------------------------------------------------------------------------
 
     def _test_evidence(self, feature: dict, head: Optional[str]) -> List[dict]:
         runs = []
@@ -687,13 +694,8 @@ class FeatureIngest:
         runs.sort(key=lambda r: r.get("started_at") or "")
         out = []
         for test in (feature.get("tests") or {}).get("tests", []):
-            wanted = self._norm_cmd(test["command"])
-            matches = []
-            if wanted:
-                for run in runs:
-                    got = self._norm_cmd(run.get("command", ""))
-                    if got == wanted or got.startswith(wanted + " ") or (len(wanted) > 6 and wanted in got):
-                        matches.append(run)
+            wanted = command_key(test["command"])
+            matches = [run for run in runs if wanted and run_key(run) == wanted]
             latest = matches[-1] if matches else None
             if latest is not None:
                 status = "verified_pass" if latest.get("exit_code") == 0 else "verified_fail"
@@ -710,12 +712,36 @@ class FeatureIngest:
                 "status": status,
                 "claimed_result": test["claimed_result"],
                 "command": test["command"],
-                "current": bool(latest and head and latest.get("head") == head and not latest.get("dirty")),
+                "current": bool(latest and head and self._run_is_current(latest, head)),
                 "runs": [{"file": r.get("file"), "command": r.get("command"), "exit_code": r.get("exit_code"),
                           "started_at": r.get("started_at"), "duration_s": r.get("duration_s"), "head": r.get("head"),
                           "session_id": r.get("session_id")} for r in matches[-10:]],
             })
         return out
+
+    def _run_is_current(self, run: dict, head: str) -> bool:
+        """Whether a run tested exactly the code at the feature head.
+
+        The protocol is test, then commit, so a run usually saw uncommitted
+        changes on top of its HEAD. It is current when those changes, as
+        recorded, are exactly what separates its HEAD from the feature head.
+        """
+        ran_at = run.get("head")
+        if not ran_at or head == "WORKTREE":
+            return False
+        if not run.get("dirty"):
+            return ran_at == head
+        dirty = run.get("dirty_files")
+        if not isinstance(dirty, dict) or not self.object_exists(ran_at):
+            return False
+        paths = set(dirty) | set(gitutil.changed_paths(self.repo, ran_at, head))
+        if len(paths) > 2000:
+            return False
+        for path in paths:
+            expected = dirty[path] if path in dirty else gitutil.blob_id(self.repo, ran_at, path)
+            if expected != gitutil.blob_id(self.repo, head, path):
+                return False
+        return True
 
     def _critical_path_status(self, feature: dict, test_evidence: List[dict]) -> List[dict]:
         tests = (feature.get("tests") or {})

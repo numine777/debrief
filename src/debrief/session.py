@@ -31,6 +31,9 @@ CLOSEOUT_SKILL = "ai-session-closeout/SKILL.md"
 SESSION_SKILL = "ai-session/SKILL.md"
 OUTPUT_TAIL_LINES = 60
 OUTPUT_TAIL_CHARS = 6000
+MAX_DIRTY_FILES = 500
+AGENT_NETWORK_TIMEOUT = 20  # seconds for the pulls start and now make; they retry on the next call
+PUBLISH_NETWORK_TIMEOUT = 60
 
 
 def skills_dir() -> Path:
@@ -576,6 +579,7 @@ def cmd_run(ctx: Optional[Context], args) -> int:
     display = command[0] if use_shell else shlex.join(command)
     sid, meta = (_resolve_session(ctx) if ctx else (None, None))
     head = gitutil.head(ctx.repo_root) if ctx else None
+    dirty = worktree_state(ctx.repo_root) if ctx and meta else {}
     started = util.utcnow()
     t0 = time.monotonic()
     tail: collections.deque = collections.deque(maxlen=OUTPUT_TAIL_LINES)
@@ -631,7 +635,9 @@ def cmd_run(ctx: Optional[Context], args) -> int:
         "started_at": util.now_iso(started),
         "ended_at": util.now_iso(),
         "head": head,
-        "dirty": gitutil.is_dirty(ctx.repo_root),
+        "dirty": bool(dirty),
+        # What the run saw on top of HEAD, so ingest can tell whether the tested code is what got committed.
+        "dirty_files": dirty if len(dirty) <= MAX_DIRTY_FILES else None,
         "session_id": sid,
         "output_tail": output,
     }
@@ -647,6 +653,14 @@ def cmd_run(ctx: Optional[Context], args) -> int:
     status = "passed" if code == 0 else f"failed (exit {code})"
     print(f"[debrief] recorded run: {display} {status} in {duration:.1f}s", file=sys.stderr)
     return code
+
+
+def worktree_state(repo: Path) -> Dict[str, Optional[str]]:
+    """Uncommitted files and their blob ids (None for deletions), hashed without writing to the repo."""
+    paths = [path for code, path in gitutil.status_porcelain(repo)]
+    if len(paths) > MAX_DIRTY_FILES:
+        return {p: None for p in paths}
+    return gitutil.hash_files(repo, paths)
 
 
 def feature_base(ctx: Context) -> Optional[str]:
