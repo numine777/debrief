@@ -512,6 +512,27 @@ pre.quoted { margin: 0.3rem 0; padding: 0.3rem 0.6rem; background: var(--sheet-2
 .login { max-width: 28rem; margin: 3rem auto; display: grid; gap: 0.8rem; }
 .login input { padding: 0.5rem 0.6rem; border: 1px solid var(--rule-strong); border-radius: var(--radius); font-family: var(--font-code); background: var(--sheet); }
 .login p { font-family: var(--font-prose); margin: 0; }
+/* The touch review bar: hunk to hunk, comment and mark, within thumb reach. */
+.review-bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.45rem 0.6rem calc(0.45rem + env(safe-area-inset-bottom, 0px));
+  background: var(--sheet); border-top: 1px solid var(--rule-strong); box-shadow: 0 -6px 18px rgba(17, 23, 28, 0.08);
+}
+.review-bar.typing { display: none; }
+.review-bar .iconbtn { width: 2.75rem; height: 2.75rem; flex: none; }
+.review-bar .iconbtn svg { width: 18px; height: 18px; }
+.review-bar .btn { min-height: 2.75rem; padding: 0.3rem 0.8rem; flex: none; }
+.review-bar .spacer { flex: 1; }
+.mark-toggle .box { display: inline-grid; place-items: center; width: 1rem; height: 1rem; border: 1.5px solid currentColor; border-radius: 2px; }
+.mark-toggle .box svg { width: 12px; height: 12px; stroke-width: 2.2; visibility: hidden; }
+.mark-toggle[aria-pressed="true"] { background: var(--focus-wash); border-color: var(--focus); color: var(--focus); }
+.mark-toggle[aria-pressed="true"] .box svg { visibility: visible; }
+body.has-review-bar main { padding-bottom: 6rem; }
+body.has-review-bar .toast { bottom: calc(4.6rem + env(safe-area-inset-bottom, 0px)); }
+body.has-review-bar .notice { bottom: calc(4.6rem + env(safe-area-inset-bottom, 0px)); }
+/* A code line picked for a comment. */
+table.code tr.picked td { background: var(--focus-wash); }
+table.code tr.picked td.ln { box-shadow: inset 3px 0 0 var(--focus); color: var(--focus); }
 .notice { position: fixed; right: 1.2rem; bottom: 1.2rem; z-index: 40; background: var(--sheet); border: 1px solid var(--focus); border-radius: var(--radius); padding: 0.6rem 0.8rem; display: flex; gap: 0.5rem; align-items: center; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15); font-size: var(--s-14); }
 
 /* --- queue ------------------------------------------------------------------------------------ */

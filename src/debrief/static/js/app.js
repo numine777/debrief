@@ -95,6 +95,8 @@
 
   D.rerender = render;
   D.route = parseRoute;
+  D.moveHunk = (step) => moveHunk(step);
+  D.onScreen = (el) => onScreen(el);
 
   D.setCrumbs = function (items) {
     if (!crumbs) return;
@@ -120,10 +122,13 @@
 
   // --- keyboard ----------------------------------------------------------------------------------------
   let pendingG = false;
+  const onScreen = (el) => { const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < window.innerHeight; };
   function moveHunk(step) {
     const hunks = Array.from(document.querySelectorAll(".hunk"));
     if (!hunks.length) return;
-    const current = document.querySelector(".hunk.current");
+    let current = document.querySelector(".hunk.current");
+    // A current hunk the reader has since scrolled away from no longer anchors the move.
+    if (current && !onScreen(current)) { current.classList.remove("current"); current = null; }
     let i = current ? hunks.indexOf(current) + step : (step > 0 ? 0 : hunks.length - 1);
     if (!current) {
       // start from the first hunk below the top of the viewport

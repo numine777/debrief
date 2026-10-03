@@ -180,6 +180,8 @@
       },
     }));
     tr.after(row);
+    // Focus now, inside the tap that opened it: iOS raises the keyboard only for focus given during a gesture.
+    row.querySelector("textarea").focus({ preventScroll: true });
   }
 
   function refreshTabCount(feature) {
@@ -240,10 +242,12 @@
           const numbers = tr.querySelectorAll("td.ln > span");
           const target = side === "old" ? numbers[0] : numbers[1];
           if (target && line) {
+            const open = () => openComposer(feature, tr, file, hunk, tag, o, n, text, scope, commit);
             const btn = h("button", { class: "ln-btn", type: "button", title: "Comment on this line",
               "aria-label": `Comment on ${side === "old" ? "removed " : ""}line ${line} of ${file.path}` }, String(line));
-            btn.addEventListener("click", () => openComposer(feature, tr, file, hunk, tag, o, n, text, scope, commit));
+            btn.addEventListener("click", open);
             clear(target).appendChild(btn);
+            tr._comment = open; // the touch review bar comments on a picked line through this
           }
         }
         const path = side === "old" ? (file.old_path || file.path) : file.path;
@@ -255,6 +259,7 @@
         const btn = h("button", { class: "btn small mark-btn", type: "button", dataset: { hunk: hunk.id } });
         setMarkButton(btn, markSet(feature).has(hunk.id));
         btn.addEventListener("click", () => toggleMark(feature, hunk.id, btn));
+        btn._toggle = () => toggleMark(feature, hunk.id, null); // for the touch review bar, without moving focus
         return btn;
       },
     };
@@ -416,6 +421,117 @@
       if (btn) { btn.click(); evt.preventDefault(); }
     }
   };
+
+  // --- touch review bar -------------------------------------------------------------------------------
+  // A phone or tablet has no j, k, c or m keys. Where the pointer is a finger (or the screen is phone
+  // sized), pages with hunks get a bar within thumb reach: previous and next hunk, comment on the
+  // picked line (tap a code line to pick it) or the hunk's first change, and mark the hunk reviewed.
+  // It acts on the current hunk, outlined; scrolling makes the hunk at the top of the screen current.
+  const touchQuery = window.matchMedia ? window.matchMedia("(pointer: coarse), (max-width: 640px)") : null;
+  const touch = () => Boolean(touchQuery && touchQuery.matches);
+  const TOP_BAND = 64; // sticky tab bar plus a little air
+  let bar = null;
+  let picked = null;
+
+  function hunkAtTop() {
+    for (const el of document.querySelectorAll("#app .hunk")) {
+      const r = el.getBoundingClientRect();
+      if (r.bottom > TOP_BAND + 24) return r.top < window.innerHeight ? el : null;
+    }
+    return null;
+  }
+
+  function currentHunk() {
+    const current = document.querySelector("#app .hunk.current");
+    return current && D.onScreen(current) ? current : hunkAtTop();
+  }
+
+  function setCurrent(hunk) {
+    for (const el of document.querySelectorAll(".hunk.current")) if (el !== hunk) el.classList.remove("current");
+    if (hunk) hunk.classList.add("current");
+  }
+
+  function unpick() {
+    if (picked) picked.classList.remove("picked");
+    picked = null;
+  }
+
+  function buildBar() {
+    const comment = h("button", { class: "btn", type: "button", onclick: () => {
+      const row = picked && picked.isConnected ? picked : null;
+      if (row) { setCurrent(row.closest(".hunk")); unpick(); row._comment(); return sync(); }
+      const hunk = currentHunk();
+      const first = hunk && (Array.from(hunk.querySelectorAll("tr.add, tr.del")).find((tr) => tr._comment) ||
+        Array.from(hunk.querySelectorAll("tr")).find((tr) => tr._comment));
+      if (first) { setCurrent(hunk); first._comment(); }
+      sync();
+    } }, "Comment");
+    const mark = h("button", { class: "btn mark-toggle", type: "button", "aria-pressed": "false", onclick: async () => {
+      const hunk = currentHunk();
+      const btn = hunk && hunk.querySelector(".mark-btn");
+      if (!btn) return;
+      setCurrent(hunk);
+      await btn._toggle();
+      sync();
+    } }, h("span", { class: "box", "aria-hidden": "true" }, D.icon("check")), "Reviewed");
+    bar = h("div", { class: "review-bar", role: "toolbar", "aria-label": "Review", hidden: true },
+      h("button", { class: "iconbtn", type: "button", "aria-label": "Previous hunk", onclick: () => { unpick(); D.moveHunk(-1); sync(); } }, D.icon("up")),
+      h("button", { class: "iconbtn", type: "button", "aria-label": "Next hunk", onclick: () => { unpick(); D.moveHunk(1); sync(); } }, D.icon("down")),
+      h("span", { class: "spacer" }), comment, mark);
+    bar.parts = { comment, mark };
+    document.body.appendChild(bar);
+  }
+
+  function sync() {
+    if (!bar) buildBar();
+    const show = touch() && Boolean(document.querySelector("#app .hunk"));
+    bar.hidden = !show;
+    document.body.classList.toggle("has-review-bar", show);
+    if (!show) return;
+    // A saved comment removes its focused field without a focusout, so check what has focus now.
+    bar.classList.toggle("typing", Boolean(document.activeElement) && typing(document.activeElement));
+    if (picked && !picked.isConnected) picked = null;
+    const hunk = picked ? picked.closest(".hunk") : currentHunk();
+    setCurrent(hunk); // the outline shows which hunk the buttons act on
+    const { comment, mark } = bar.parts;
+    // Comment needs write access (lines then carry a comment action); marks exist only in feature scope.
+    comment.hidden = !document.querySelector("#app .ln-btn");
+    comment.disabled = !hunk || !hunk.querySelector(".ln-btn");
+    comment.textContent = picked ? `Comment on line ${picked.dataset.line}` : "Comment";
+    const markBtn = hunk && hunk.querySelector(".mark-btn");
+    mark.hidden = !document.querySelector("#app .mark-btn");
+    mark.disabled = !markBtn;
+    mark.setAttribute("aria-pressed", markBtn ? markBtn.getAttribute("aria-pressed") : "false");
+  }
+
+  let frame = 0;
+  const schedule = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; sync(); }); };
+  window.addEventListener("scroll", schedule, { passive: true });
+  window.addEventListener("resize", schedule);
+  if (touchQuery && touchQuery.addEventListener) touchQuery.addEventListener("change", schedule);
+  // Pages render, and Story mode loads each commit's hunks, after navigation: watch the app for them.
+  new MutationObserver(schedule).observe(document.getElementById("app") || document.body, { childList: true, subtree: true });
+  window.addEventListener("hashchange", () => { picked = null; });
+
+  // Tap a code line to pick it for a comment; tap it again to let go.
+  document.addEventListener("click", (evt) => {
+    if (!touch() || !evt.target.closest) return;
+    const tr = evt.target.closest("table.code tr");
+    if (!tr || !tr._comment || evt.target.closest("a, button, input, textarea, select")) return;
+    const again = picked === tr;
+    unpick();
+    if (!again) {
+      picked = tr;
+      tr.classList.add("picked");
+      setCurrent(tr.closest(".hunk"));
+    }
+    sync();
+  });
+
+  // The on-screen keyboard needs the room while a comment is being written.
+  const typing = (el) => el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && /^(text|search|password)$/.test(el.type));
+  document.addEventListener("focusin", (evt) => { if (bar) bar.classList.toggle("typing", typing(evt.target)); });
+  document.addEventListener("focusout", () => { if (bar) bar.classList.remove("typing"); });
 
   // --- new evidence notice (serve --watch) -----------------------------------------------------------
   async function poll() {

@@ -216,6 +216,9 @@
     theme: "M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zm0 0v13",
     help: "M6 6a2 2 0 1 1 3 1.7c-.6.4-1 .8-1 1.5V10M8 12.5v.5",
     refresh: "M13 3v3.5H9.5M3 13V9.5h3.5M12.6 6.5A5 5 0 0 0 3.6 5M3.4 9.5a5 5 0 0 0 9 1.5",
+    up: "M8 13V3M3.5 7.5 8 3l4.5 4.5",
+    down: "M8 3v10M3.5 8.5 8 13l4.5-4.5",
+    check: "M3.5 8.5l3 3 6-7",
   };
   function icon(name) {
     return h("svg", { viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", "stroke-width": "1.5", "stroke-linecap": "round", "aria-hidden": "true" },

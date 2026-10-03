@@ -370,6 +370,63 @@ class PhoneLayoutTests(IsolatedTestCase):
             self.assertLess(wide.locator(".mark-btn").first.bounding_box()["height"], 30)  # desktop stays dense
             self.assertEqual(page.errors + wide.errors, [])
 
+    def test_review_bar_moves_comments_and_marks_by_touch(self):
+        with sync_playwright() as p:
+            page = self.open(p, self.feature + "/diff?mode=systems", ".hunk")
+            bar = page.locator(".review-bar")
+            bar.wait_for()
+            # The hunk the bar acts on is outlined; the arrows move it.
+            first = page.locator(".hunk.current").get_attribute("data-hunk")
+            self.assertEqual(first, page.locator(".hunk").first.get_attribute("data-hunk"))
+            bar.locator("button[aria-label='Next hunk']").tap()
+            self.assertEqual(page.locator(".hunk.current").get_attribute("data-hunk"), page.locator(".hunk").nth(1).get_attribute("data-hunk"))
+            bar.locator("button[aria-label='Previous hunk']").tap()
+            self.assertEqual(page.locator(".hunk.current").get_attribute("data-hunk"), first)
+            # Tap a line to pick it, then comment on it from the bar.
+            row = page.locator("tr.add", has_text="compute_the_answer")
+            row.locator("td.src").tap()
+            self.assertIn("picked", row.get_attribute("class"))
+            bar.locator("button", has_text="Comment on line 3").tap()
+            page.locator(".composer textarea").fill("Why four arguments?")
+            self.assertFalse(bar.is_visible())  # the keyboard needs the room
+            page.locator(".composer button[type=submit]").tap()
+            page.locator(".comment-row", has_text="Why four arguments?").wait_for()
+            bar.wait_for()
+            comments = page.request.get(self.base + f"api/v1/projects/{self.pid}/features/feat--phone").json()["comments"]
+            self.assertEqual([(c["anchor"]["path"], c["anchor"]["line"]) for c in comments], [("app.py", 3)])
+            # Mark the outlined hunk reviewed.
+            bar.locator(".mark-toggle").tap()
+            page.locator(".hunk.current .mark-btn[aria-pressed=true]").wait_for()
+            self.assertEqual(bar.locator(".mark-toggle").get_attribute("aria-pressed"), "true")
+            # Desktop has the keys instead.
+            wide = self.open(p, self.feature + "/diff?mode=systems", ".hunk", viewport={"width": 1280, "height": 800},
+                             is_mobile=False, has_touch=False)
+            self.assertFalse(wide.locator(".review-bar").is_visible())
+            self.assertEqual(page.errors + wide.errors, [])
+
+    def test_review_bar_offers_only_what_the_page_allows(self):
+        from debrief import export
+        from debrief.api import Api
+
+        out = self.tmp / "export.html"
+        out.write_text(export.render(Api(self.archive), self.pid, "feat--phone"))
+        with sync_playwright() as p:
+            page = self.open(p, self.feature + "/diff?mode=story", ".hunk")
+            bar = page.locator(".review-bar")
+            bar.wait_for()
+            self.assertFalse(bar.locator(".mark-toggle").is_visible())  # marks belong to the feature diff
+            self.assertTrue(bar.locator("button", has_text="Comment").is_visible())
+            page.goto(out.as_uri() + f"#/p/{self.pid}/f/feat--phone/diff?mode=systems")
+            page.locator(".hunk").first.wait_for()
+            bar.wait_for()
+            self.assertFalse(bar.locator("button", has_text="Comment").is_visible())  # a read-only copy
+            self.assertFalse(bar.locator(".mark-toggle").is_visible())
+            self.assertTrue(bar.locator("button[aria-label='Next hunk']").is_visible())
+            page.goto(self.base + self.feature + "/tests")
+            page.locator("table.tests-table").wait_for()
+            self.assertFalse(bar.is_visible())  # no hunks, no bar
+            self.assertEqual(page.errors, [])  # the export's hash-locked CSP allows everything above
+
     def test_search_and_help_suit_the_screen(self):
         with sync_playwright() as p:
             page = self.open(p, self.feature, ".feature-head")
