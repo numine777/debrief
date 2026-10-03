@@ -9,6 +9,7 @@ keeps both versions of anything it doesn't, flagging the feature for review.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -38,15 +39,27 @@ def _identity_env(project_dir: Path) -> Dict[str, str]:
 NETWORK_TIMEOUT = 120  # seconds; an unreachable remote or an SSH prompt must not hang an agent's command
 
 
-def _git(project_dir: Path, args: List[str], check: bool = True, ok_codes=(0,), timeout=None) -> str:
+def _git(project_dir: Path, args: List[str], check: bool = True, ok_codes=(0,), timeout=None,
+         network: bool = False) -> str:
+    env = _identity_env(project_dir)
+    if network:
+        env.update(_network_env(project_dir))
     return gitutil.run(
         ["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", *args],
         project_dir,
         check=check,
-        env_extra=_identity_env(project_dir),
+        env_extra=env,
         ok_codes=ok_codes,
         timeout=timeout,
     )
+
+
+def _network_env(project_dir: Path) -> Dict[str, str]:
+    """Never prompt: an SSH passphrase or host-key question would hang an agent's command."""
+    if os.environ.get("GIT_SSH_COMMAND") or os.environ.get("GIT_SSH") or \
+            gitutil.try_run(["config", "--get", "core.sshCommand"], project_dir):
+        return {}
+    return {"GIT_SSH_COMMAND": "ssh -o BatchMode=yes -o ConnectTimeout=15"}
 
 
 def is_repo(project_dir: Path) -> bool:
@@ -177,7 +190,7 @@ def _resolve_conflicts(project_dir: Path) -> List[str]:
     return kept_both
 
 
-def pull(project_dir: Path, cfg: Optional[Config] = None) -> dict:
+def pull(project_dir: Path, cfg: Optional[Config] = None, timeout: Optional[float] = None) -> dict:
     project_dir = Path(project_dir)
     url = remote_url(project_dir)
     if not url:
@@ -186,7 +199,7 @@ def pull(project_dir: Path, cfg: Optional[Config] = None) -> dict:
     branch = _branch(project_dir)
     with lock(project_dir):
         try:
-            _git(project_dir, ["fetch", "-q", "origin"], timeout=NETWORK_TIMEOUT)
+            _git(project_dir, ["fetch", "-q", "origin"], timeout=timeout or NETWORK_TIMEOUT, network=True)
         except gitutil.GitError as exc:
             return {"pulled": False, "reason": exc.stderr or str(exc)}
         remote_ref = f"refs/remotes/origin/{branch}"
@@ -205,7 +218,7 @@ def pull(project_dir: Path, cfg: Optional[Config] = None) -> dict:
         return {"pulled": True, "conflicts": []}
 
 
-def push(project_dir: Path, cfg: Optional[Config] = None) -> dict:
+def push(project_dir: Path, cfg: Optional[Config] = None, timeout: Optional[float] = None) -> dict:
     project_dir = Path(project_dir)
     url = remote_url(project_dir)
     if not url:
@@ -214,7 +227,8 @@ def push(project_dir: Path, cfg: Optional[Config] = None) -> dict:
     branch = _branch(project_dir)
     with lock(project_dir):
         try:
-            _git(project_dir, ["push", "-q", "origin", f"HEAD:refs/heads/{branch}"], timeout=NETWORK_TIMEOUT)
+            _git(project_dir, ["push", "-q", "origin", f"HEAD:refs/heads/{branch}"], timeout=timeout or NETWORK_TIMEOUT,
+                 network=True)
         except gitutil.GitError as exc:
             return {"pushed": False, "reason": exc.stderr or str(exc)}
     return {"pushed": True}

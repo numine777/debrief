@@ -428,7 +428,7 @@ def _maybe_pull(ctx: Context, force: bool = False) -> Optional[str]:
     try:
         with archive.lock(ctx.project_dir):
             archive.commit(ctx.project_dir, f"Checkpoint records from {util.hostname()}")
-        result = archive.pull(ctx.project_dir, cfg)
+        result = archive.pull(ctx.project_dir, cfg, timeout=AGENT_NETWORK_TIMEOUT)
     except Exception as exc:  # network or residency problems must not stop the agent
         return f"archive pull failed: {exc}"
     if result.get("conflicts"):

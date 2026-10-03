@@ -166,6 +166,13 @@ class ArchiveSyncTests(IsolatedTestCase):
         self.assertEqual(merged["created_at"], "2020-01-01T00:00:00Z")
         self.assertFalse(list(other.glob("project.json.conflict-*")))
 
+    def test_network_calls_never_prompt(self):
+        env = archive._network_env(self.a)
+        self.assertIn("BatchMode=yes", env["GIT_SSH_COMMAND"])
+        os.environ["GIT_SSH_COMMAND"] = "ssh -i mykey"
+        self.addCleanup(os.environ.pop, "GIT_SSH_COMMAND", None)
+        self.assertEqual(archive._network_env(self.a), {})  # the user's own ssh command wins
+
     def test_unpushed_commits_are_detected(self):
         self.assertFalse(archive.unpushed(self.a))
         util.write_json(self.a / "features" / "f" / "comments.json", {"comments": []})
