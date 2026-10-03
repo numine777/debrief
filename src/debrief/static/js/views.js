@@ -221,6 +221,7 @@
         h("div", { class: "legend" },
           h("span", null, h("b", null, pct(cov.ratio)), `explained of ${plural(cov.units || 0, "changed hunk")}`),
           Array.from(D.coverageLegend(cov).childNodes),
+          D.headerExtras ? D.headerExtras(feature) : null,
           unexplained ? h("a", { href: `${base}/diff?mode=systems#unexplained` }, `Review ${plural(unexplained, "unexplained hunk")}`) : null)),
       tabs);
   }
@@ -277,6 +278,7 @@
         h("dt", null, "Change"), h("dd", null, `${stats.files || 0} files, +${stats.additions || 0} −${stats.deletions || 0}`),
         h("dt", null, "Sessions"), h("dd", null, `${stats.sessions || 0} sessions, ${stats.runs || 0} recorded runs`))));
     aside.appendChild(legsBlock(feature));
+    if (D.briefExtras) D.briefExtras(aside, feature);
     if (feature.issues.length) {
       aside.appendChild(h("div", { class: "aside-block" }, h("h3", null, `Record issues (${feature.issues.length})`),
         h("ul", { class: "issues-list" }, feature.issues.slice(0, 12).map((i) => h("li", null,

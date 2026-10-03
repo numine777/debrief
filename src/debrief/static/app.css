@@ -442,6 +442,28 @@ table.code tr.more td { text-align: center; padding: 0.3rem; }
 .callout .inv { font-family: var(--font-prose); font-size: var(--s-14); line-height: 1.45; }
 .callout .flag-msg { color: var(--hostile); }
 
+/* --- review loop: comments, composer, marks ------------------------------------------------- */
+.ln-btn { border: 0; background: none; color: inherit; font: inherit; padding: 0; cursor: pointer; width: 100%; text-align: right; }
+.ln-btn:hover, .ln-btn:focus-visible { color: var(--focus); text-decoration: underline; }
+tr.comment-row td, tr.composer-row td { background: var(--paper); padding: 0.45rem 0.6rem 0.45rem 4rem; white-space: normal; font-family: var(--font-ui); }
+.comment { background: var(--sheet); border: 1px solid var(--rule); border-left: 3px solid var(--focus); border-radius: var(--radius); padding: 0.45rem 0.7rem; max-width: 52rem; }
+.comment.shared { border-left-color: var(--friend); }
+.comment.state-resolved { opacity: 0.7; }
+.comment .prose { font-size: var(--s-14); margin: 0.2rem 0 0; }
+.comment-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.6rem; font-size: var(--s-13); }
+.comment-meta .spacer, .diff-toolbar .spacer, .composer-actions .spacer { flex: 1; }
+.reply { border-top: 1px solid var(--rule); margin-top: 0.4rem; padding-top: 0.35rem; }
+.composer { max-width: 52rem; }
+.composer textarea { width: 100%; font-family: var(--font-prose); font-size: var(--s-14); padding: 0.45rem 0.6rem; border: 1px solid var(--rule-strong); border-radius: var(--radius); background: var(--sheet); resize: vertical; }
+.composer-actions { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.35rem; flex-wrap: wrap; }
+.composer-actions select { border: 1px solid var(--rule-strong); border-radius: var(--radius); background: var(--sheet); font-size: var(--s-13); padding: 0.15rem 0.3rem; }
+.mark-btn[aria-pressed="true"] { background: var(--focus-wash); border-color: var(--focus); color: var(--focus); }
+.review-progress { color: var(--focus); }
+.comment-item { display: grid; grid-template-columns: 1.4rem minmax(0, 1fr); gap: 0.5rem; padding: 0.6rem 0; border-bottom: 1px solid var(--rule); align-items: start; }
+.comment-item input { margin-top: 0.3rem; }
+pre.quoted { margin: 0.3rem 0; padding: 0.3rem 0.6rem; background: var(--sheet-2); border-left: 3px solid var(--rule-strong); font-size: var(--s-13); white-space: pre-wrap; overflow-wrap: anywhere; }
+.notice { position: fixed; right: 1.2rem; bottom: 1.2rem; z-index: 40; background: var(--sheet); border: 1px solid var(--focus); border-radius: var(--radius); padding: 0.6rem 0.8rem; display: flex; gap: 0.5rem; align-items: center; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15); font-size: var(--s-14); }
+
 /* --- queue ------------------------------------------------------------------------------------ */
 .filters { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 1rem; }
 .filters button { border: 1px solid var(--rule-strong); background: var(--sheet); border-radius: 999px; padding: 0.1rem 0.65rem; font-size: var(--s-13); cursor: pointer; }

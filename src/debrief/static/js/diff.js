@@ -117,8 +117,9 @@
         const [tag, o, n, text] = rows[i];
         const flagged = tag === "+" && flaggedLines.has(n);
         const tr = lineRow(tag, o, n, text, lang, flagged ? { cls: "flagged", title: flags.filter((f) => f.line === n).map((f) => f.title).join("\n") } : null);
-        if (ctx.decorateLine) ctx.decorateLine(tr, file, hunk, tag, o, n, text);
+        const extra = ctx.decorateLine ? ctx.decorateLine(tr, file, hunk, tag, o, n, text) : null;
         tbody.appendChild(tr);
+        if (extra) for (const row of extra) tbody.appendChild(row);
       }
     };
     if (rows.length > MAX_INITIAL_LINES * 1.4) {

@@ -262,6 +262,7 @@
       const cell = h(opts.mini ? "span" : "button", {
         class: ["cell", "state-" + u.state, reviewed && "reviewed"],
         type: opts.mini ? null : "button",
+        dataset: { hunk: u.id },
         "aria-label": opts.mini ? null : `${u.path}${u.symbol ? " " + u.symbol : ""}: ${u.size} changed lines, ${stateLabel(u.state)}`,
       });
       cell.style.flexGrow = String(weight);
