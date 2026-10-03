@@ -389,7 +389,7 @@ table.grid td code, table.grid td .mono { font-size: var(--s-12); }
 table.grid td .tid { white-space: nowrap; }
 .anchor-list { list-style: none; padding: 0; margin: 0; font-size: var(--s-13); }
 .anchor-list li { padding: 0.2rem 0; display: flex; gap: 0.4rem; align-items: baseline; }
-.anchor-list .mono { font-size: var(--s-12); }
+.anchor-list .mono { font-size: var(--s-12); min-width: 0; overflow-wrap: anywhere; }
 .anchor-stale { color: var(--hostile); }
 
 /* --- diff -------------------------------------------------------------------------------------- */
@@ -648,6 +648,8 @@ kbd { font-family: var(--font-code); font-size: var(--s-12); border: 1px solid v
   .topbar { position: static; }
   main { padding-top: 0.75rem; }
   .feature-head { margin: 0 calc(-1 * var(--gutter)); border-left: 0; border-right: 0; border-radius: 0; padding: 0.9rem var(--gutter) 0.7rem; }
+  /* Paths, SHAs and identifiers are long unbroken words: on a phone they break rather than widen the page. */
+  main .mono, main code, main .sha, main .path { overflow-wrap: anywhere; }
   /* Wrapped legs read better as separate tags than as a broken segmented row. */
   .legs { gap: 0.3rem; }
   .legs .leg, .legs .leg + .leg { border: 1px solid var(--rule-strong); border-radius: var(--radius); }

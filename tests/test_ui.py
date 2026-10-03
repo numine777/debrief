@@ -281,6 +281,15 @@ class PhoneLayoutTests(IsolatedTestCase):
                 }""")
                 self.assertLessEqual(page.evaluate("() => document.documentElement.scrollWidth"), width)
                 self.assertEqual(page.evaluate(OFFSCREEN), [], f"long header at {width} px")
+                # ... and so do long anchor paths beside a system's prose.
+                page.goto(self.base + self.feature + "/system/app")
+                page.locator(".anchor-list li").first.wait_for()
+                page.evaluate("""() => {
+                  const span = document.querySelector(".anchor-list li .mono");
+                  span.textContent = "src/a/deeply/nested/package/module_with_a_long_name.py:Owner.method_with_a_long_name (120-180)";
+                }""")
+                self.assertLessEqual(page.evaluate("() => document.documentElement.scrollWidth"), width)
+                self.assertEqual(page.evaluate(OFFSCREEN), [], f"long anchors at {width} px")
                 self.assertEqual(page.errors, [])
 
     def test_code_rows_show_one_line_number_and_hang_wrapped_lines(self):
