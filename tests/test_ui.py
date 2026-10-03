@@ -178,11 +178,12 @@ class ViewerSmokeTests(IsolatedTestCase):
 PHONE = {"viewport": {"width": 390, "height": 844}, "is_mobile": True, "has_touch": True, "device_scale_factor": 2}
 DROP_Y = "Drop y from util because nothing reads it any longer anywhere in the app"
 
-# Everything in main that sticks out past the right edge of the screen, other than inside something
+# Everything on the page that sticks out past the right edge of the screen, other than inside something
 # that scrolls or clips within the screen. Code is skipped: a wrapped line's trailing spaces may hang.
+# The width is the layout's (clientWidth): a phone widens innerWidth to fit content that overflows.
 OFFSCREEN = """() => {
-  const vw = window.innerWidth, out = [];
-  for (const el of document.querySelectorAll("main *")) {
+  const vw = document.documentElement.clientWidth, out = [];
+  for (const el of document.querySelectorAll("body *")) {
     if (el.closest("td.src")) continue;
     const r = el.getBoundingClientRect();
     if (!r.width || r.right <= vw + 1) continue;
@@ -270,6 +271,16 @@ class PhoneLayoutTests(IsolatedTestCase):
                     page.wait_for_timeout(300)  # diffs and tab scrolling settle after the first paint
                     self.assertLessEqual(page.evaluate("() => document.documentElement.scrollWidth"), width, route)
                     self.assertEqual(page.evaluate(OFFSCREEN), [], f"{route} at {width} px")
+                # A long-running feature: a dozen legs and a long branch name still fit.
+                page.goto(self.base + self.feature)
+                page.locator(".feature-head .legs").wait_for()
+                page.evaluate("""() => {
+                  const legs = document.querySelector(".feature-head .legs");
+                  for (let i = 2; i <= 13; i++) { const a = legs.firstChild.cloneNode(true); a.textContent = "Leg " + i; legs.appendChild(a); }
+                  document.querySelector(".feature-head .branch").textContent = "feat/PROJ-1234-a-very-long-branch-name-for-the-phone-layout";
+                }""")
+                self.assertLessEqual(page.evaluate("() => document.documentElement.scrollWidth"), width)
+                self.assertEqual(page.evaluate(OFFSCREEN), [], f"long header at {width} px")
                 self.assertEqual(page.errors, [])
 
     def test_code_rows_show_one_line_number_and_hang_wrapped_lines(self):

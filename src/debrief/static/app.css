@@ -91,6 +91,8 @@ a { color: inherit; text-decoration-color: var(--rule-strong); text-underline-of
 a:hover { text-decoration-color: currentColor; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 button, input, select, textarea { font: inherit; color: inherit; }
+/* A select is as wide as its longest option unless told otherwise. */
+select { max-width: 100%; }
 code, pre, .mono { font-family: var(--font-code); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .skip-link { position: absolute; left: 0.5rem; top: -3rem; z-index: 50; padding: 0.4rem 0.7rem; background: var(--sheet); border: 2px solid var(--focus); color: var(--ink); }
@@ -267,8 +269,9 @@ h3 { font-size: var(--s-18); margin: 1.2rem 0 0.4rem; }
 /* The header card and the tab bar below it read as one sheet; the bar is separate so it can stick on phones. */
 .feature-head { background: var(--sheet); border: 1px solid var(--rule); border-bottom: 0; border-radius: var(--radius) var(--radius) 0 0; padding: 1rem 1.2rem; }
 .feature-head .facts { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; color: var(--ink-2); font-size: var(--s-14); margin-bottom: 0.8rem; }
-.feature-head .branch { font-family: var(--font-code); font-size: var(--s-13); }
-.legs { display: inline-flex; align-items: center; gap: 0; }
+.feature-head .branch { font-family: var(--font-code); font-size: var(--s-13); overflow-wrap: anywhere; }
+/* Legs grow with the feature, so the row wraps rather than widening the page. */
+.legs { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0; max-width: 100%; }
 .legs .leg { font-size: var(--s-13); padding: 0.05rem 0.45rem; border: 1px solid var(--rule-strong); background: var(--sheet); text-decoration: none; white-space: nowrap; }
 .legs .leg + .leg { border-left: 0; }
 .legs .leg:first-child { border-radius: var(--radius) 0 0 var(--radius); }
@@ -645,6 +648,10 @@ kbd { font-family: var(--font-code); font-size: var(--s-12); border: 1px solid v
   .topbar { position: static; }
   main { padding-top: 0.75rem; }
   .feature-head { margin: 0 calc(-1 * var(--gutter)); border-left: 0; border-right: 0; border-radius: 0; padding: 0.9rem var(--gutter) 0.7rem; }
+  /* Wrapped legs read better as separate tags than as a broken segmented row. */
+  .legs { gap: 0.3rem; }
+  .legs .leg, .legs .leg + .leg { border: 1px solid var(--rule-strong); border-radius: var(--radius); }
+  .legs .leg.open { border-color: var(--focus); }
   .tabs-bar { position: sticky; top: 0; z-index: 15; margin: 0 calc(-1 * var(--gutter)); border-left: 0; border-right: 0; border-radius: 0; padding: 0 0.35rem; }
   .tabs::-webkit-scrollbar { display: none; }
   .tabs { scrollbar-width: none; }
