@@ -1,0 +1,137 @@
+"""``debrief serve --watch``: keep evidence current without being asked.
+
+A polling thread (standard library only, so it works on every host) watches
+each registered project's records, branches, worktrees and default branch.
+When records or refs change it re-ingests the affected features, maps new
+default-branch commits to features (squash landings), and syncs project
+archives with their remotes every ``pull_interval`` seconds.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import threading
+import time
+from pathlib import Path
+from typing import Dict, Optional, Tuple
+
+from . import archive, gitutil, ingest, paths, projects, squash
+
+POLL_SECONDS = 5.0
+DIRTY_CHECK_SECONDS = 30.0
+
+
+def records_signature(feature_dir: Path) -> Tuple[int, int]:
+    """(newest mtime, file count) of a feature's records, ignoring evidence."""
+    newest = 0
+    count = 0
+    for dirpath, dirnames, filenames in os.walk(feature_dir):
+        dirnames[:] = [d for d in dirnames if d not in ("evidence", "squash")]
+        for name in filenames:
+            if name.startswith(".tmp-") or name.endswith(".lock"):
+                continue
+            try:
+                stat = os.stat(os.path.join(dirpath, name))
+            except OSError:
+                continue
+            newest = max(newest, stat.st_mtime_ns)
+            count += 1
+    return newest, count
+
+
+class Watcher:
+    def __init__(self, app=None, cfg=None, root: Optional[Path] = None):
+        self.app = app
+        self.root = root or paths.archive_root()
+        self.pull_interval = cfg.get_int("sync", "pull_interval", 120) if cfg else 120
+        self.records: Dict[str, Tuple[int, int]] = {}
+        self.refs: Dict[str, Dict[str, str]] = {}
+        self.dirty: Dict[str, bool] = {}
+        self.last_dirty_check: Dict[str, float] = {}
+        self.last_sync: Dict[str, float] = {}
+        self.stop_event = threading.Event()
+
+    def _changed_features(self, pid: str):
+        base = paths.project_dir(pid, self.root) / "features"
+        if not base.is_dir():
+            return []
+        changed = []
+        for feature_dir in sorted(p for p in base.iterdir() if p.is_dir()):
+            key = f"{pid}/{feature_dir.name}"
+            sig = records_signature(feature_dir)
+            if self.records.get(key) != sig:
+                self.records[key] = sig
+                changed.append(feature_dir.name)
+        return changed
+
+    def tick(self) -> int:
+        """One polling pass. Returns the number of features ingested."""
+        ingested = 0
+        now = time.monotonic()
+        for pid in projects.list_projects(self.root):
+            project_dir = paths.project_dir(pid, self.root)
+            if archive.remote_url(project_dir) and now - self.last_sync.get(pid, 0) >= self.pull_interval:
+                self.last_sync[pid] = now
+                try:
+                    archive.sync(project_dir, "Sync records")
+                except Exception as exc:  # keep watching; report once per failure
+                    print(f"debrief: syncing {pid} failed: {exc}", file=sys.stderr)
+            features = set(self._changed_features(pid))
+            repo = projects.repo_workdir(pid, self.root)
+            if repo is not None:
+                refs = gitutil.refs(repo)
+                if refs != self.refs.get(pid):
+                    first = pid not in self.refs
+                    self.refs[pid] = refs
+                    if not first:
+                        features.update(ingest.feature_ids(pid, self.root))
+                        try:
+                            squash.follow_default_branch(pid, self.root)
+                        except Exception as exc:
+                            print(f"debrief: following {pid}'s default branch failed: {exc}", file=sys.stderr)
+                if now - self.last_dirty_check.get(pid, 0) >= DIRTY_CHECK_SECONDS:
+                    self.last_dirty_check[pid] = now
+                    dirty = any(gitutil.status_porcelain(Path(t["path"])) for t in gitutil.worktrees(repo)
+                                if not t.get("bare") and Path(t["path"]).exists())
+                    if dirty or self.dirty.get(pid):
+                        features.update(f for f in ingest.feature_ids(pid, self.root) if self._has_open_leg(pid, f))
+                    self.dirty[pid] = dirty
+            for fid in sorted(features):
+                try:
+                    ingest.ingest_feature(pid, fid, self.root)
+                    ingested += 1
+                except Exception as exc:
+                    print(f"debrief: ingest of {pid}/{fid} failed: {exc}", file=sys.stderr)
+                self.records[f"{pid}/{fid}"] = records_signature(paths.feature_dir(pid, fid, self.root))
+        if ingested and self.app is not None and hasattr(self.app, "generation"):
+            self.app.generation += 1
+        return ingested
+
+    def _has_open_leg(self, pid: str, fid: str) -> bool:
+        legs_dir = paths.feature_dir(pid, fid, self.root) / "legs"
+        if not legs_dir.is_dir():
+            return False
+        from . import records
+
+        legs = records.load_legs(paths.feature_dir(pid, fid, self.root))
+        return bool(legs) and not legs[-1].get("closed_at")
+
+    def run(self) -> None:
+        # The first pass records the current state; serve's startup ingest covers it.
+        for pid in projects.list_projects(self.root):
+            self._changed_features(pid)
+            repo = projects.repo_workdir(pid, self.root)
+            if repo is not None:
+                self.refs[pid] = gitutil.refs(repo)
+        while not self.stop_event.wait(POLL_SECONDS):
+            try:
+                self.tick()
+            except Exception as exc:  # never let the watcher die
+                print(f"debrief: watcher pass failed: {exc}", file=sys.stderr)
+
+
+def start(app=None, cfg=None, root: Optional[Path] = None) -> Watcher:
+    watcher = Watcher(app, cfg, root)
+    threading.Thread(target=watcher.run, name="debrief-watch", daemon=True).start()
+    return watcher
