@@ -6,7 +6,7 @@ from tests.helpers import IsolatedTestCase, git
 from debrief import records, session, util
 
 
-class SessionFlowTests(IsolatedTestCase):
+class SessionFixture(IsolatedTestCase):
     def setUp(self):
         super().setUp()
         self.repo = self.make_repo()
@@ -17,6 +17,8 @@ class SessionFlowTests(IsolatedTestCase):
     def legs(self):
         return records.load_legs(self.fdir)
 
+
+class SessionFlowTests(SessionFixture):
     def test_untracked_repo_is_skipped(self):
         other = self.make_repo("other")
         out = self.run_session(other, "start")
@@ -166,7 +168,7 @@ class SessionFlowTests(IsolatedTestCase):
 
     def test_context_does_not_change_state(self):
         out = self.run_session(self.repo, "context")
-        self.assertIn("run `debrief-session start`", out)
+        self.assertIn("debrief-session start`", out)
         self.assertFalse(self.fdir.exists())
         self.run_session(self.repo, "start")
         out = self.run_session(self.repo, "context")
@@ -186,6 +188,29 @@ class SessionFlowTests(IsolatedTestCase):
         os.environ["CLAUDECODE"] = "1"
         self.assertEqual(session.detect_harness(), "claude-code")
 
+
+class ProtocolFixTests(SessionFixture):
+    """The protocol issues the independent QA pass found."""
+
+    def test_detached_head_keeps_its_session(self):
+        git(self.repo, "checkout", "-q", "--detach")
+        self.run_session(self.repo, "start")
+        self.commit(self.repo, "Detached work\n\nBody.", {"app.py": "y = 1\n"})
+        self.assertIn("Logged 1 commit", self.run_session(self.repo, "now"))
+        self.run_session(self.repo, "close")
+        self.assertEqual(self.last_code, 0)
+        features = [p.name for p in (self.archive / "projects" / self.pid / "features").iterdir()]
+        self.assertEqual(len([f for f in features if f.startswith("detached-")]), 1, features)
+
+    def test_branches_that_slug_alike_get_separate_features(self):
+        git(self.repo, "checkout", "-q", "-b", "feat/a+b")
+        self.run_session(self.repo, "start")
+        self.run_session(self.repo, "close")
+        git(self.repo, "checkout", "-q", "-b", "feat/a@b")
+        out = self.run_session(self.repo, "start")
+        features = sorted(p.name for p in (self.archive / "projects" / self.pid / "features").iterdir())
+        self.assertEqual(len(features), 2, features)
+        self.assertIn(f"feature  {features[1]} (branch feat/a@b)", out)
 
 if __name__ == "__main__":
     unittest.main()

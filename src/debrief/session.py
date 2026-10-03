@@ -67,10 +67,26 @@ class Context:
         if feature_override:
             self.feature_id = util.feature_id_for_branch(feature_override)
         elif self.branch:
-            self.feature_id = util.feature_id_for_branch(self.branch)
+            self.feature_id = self._branch_feature(self.branch)
         else:
-            self.feature_id = f"detached-{(self.head or 'unborn')[:8]}"
+            self.feature_id = self._detached_feature()
         self.feature_dir = paths.feature_dir(self.project_id, self.feature_id)
+
+    def _branch_feature(self, branch: str) -> str:
+        """The branch's feature id; branches whose names slug alike (a+b, a@b) get distinct ids."""
+        fid = util.feature_id_for_branch(branch)
+        legs = records.load_legs(paths.feature_dir(self.project_id, fid))
+        owner = next((leg.get("branch") for leg in legs if leg.get("branch")), None)
+        if owner and owner != branch:
+            return f"{fid}-{util.short_hash(branch, 6)}"
+        return fid
+
+    def _detached_feature(self) -> str:
+        """A detached HEAD keeps the feature its session started with, even as commits move HEAD."""
+        entry = _load_state()["sessions"].get(str(self.repo_root)) or {}
+        if entry.get("project_id") == self.project_id and str(entry.get("feature_id", "")).startswith("detached-"):
+            return entry["feature_id"]
+        return f"detached-{(self.head or 'unborn')[:8]}"
 
     @property
     def legs_dir(self) -> Path:
@@ -396,7 +412,8 @@ def _pending_requests(ctx: Context, leg: Optional[dict], session: Optional[dict]
             if mark:
                 leg["feedback_relayed_at"] = max(item["at"] for item in fresh)
     if ctx.branch and leg and leg.get("branch") and leg.get("branch") != ctx.branch:
-        notes.append(f"NOTE: HEAD is on branch {ctx.branch}, but this leg belongs to {leg.get('branch')}.")
+        notes.append(f"NOTE: HEAD is on branch {ctx.branch}, but this leg belongs to {leg.get('branch')}. Switch back "
+                     f"to {leg.get('branch')}, or pass --feature <id> to keep this work in a feature of its own.")
     return notes
 
 
