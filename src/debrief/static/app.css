@@ -379,6 +379,10 @@ table.grid td code, table.grid td .mono { font-size: var(--s-12); }
 .cp-inv { font-family: var(--font-prose); font-size: var(--s-16); line-height: 1.5; margin: 0.25rem 0; }
 .cp-fail { font-family: var(--font-prose); font-style: italic; font-size: var(--s-14); color: var(--ink-2); }
 .system-title { font-size: var(--s-24); margin: 0.4rem 0 0.5rem; }
+.system-page { display: grid; grid-template-columns: minmax(0, 46rem) minmax(18rem, 22rem); column-gap: 3.5rem; align-items: start; }
+.system-page > .sys-prose { grid-column: 1; grid-row: 1; }
+.system-page > aside { grid-column: 2; grid-row: 1 / span 2; }
+.system-page > .sys-code { grid-column: 1; grid-row: 2; min-width: 0; }
 table.grid td .tid { white-space: nowrap; }
 .anchor-list { list-style: none; padding: 0; margin: 0; font-size: var(--s-13); }
 .anchor-list li { padding: 0.2rem 0; display: flex; gap: 0.4rem; align-items: baseline; }
@@ -586,8 +590,12 @@ kbd { font-family: var(--font-code); font-size: var(--s-12); border: 1px solid v
 :root[data-theme="dark"] .hljs-attr, :root[data-theme="dark"] .hljs-variable, :root[data-theme="dark"] .hljs-params { color: #e7a3c4; }
 
 /* --- responsive ----------------------------------------------------------------------------------- */
+@media (min-width: 1101px) { .narrow-only { display: none !important; } }
 @media (max-width: 1100px) {
+  .wide-only { display: none !important; }
   .two-col { grid-template-columns: minmax(0, 1fr); }
+  .system-page { grid-template-columns: minmax(0, 1fr); }
+  .system-page > .sys-prose, .system-page > aside, .system-page > .sys-code { grid-column: 1; grid-row: auto; }
   .diff-layout { grid-template-columns: minmax(0, 1fr); }
   .outline { position: static; max-height: none; border: 1px solid var(--rule); background: var(--sheet); padding: 0.4rem; }
   .feature-row { grid-template-columns: minmax(0, 1fr) auto; }

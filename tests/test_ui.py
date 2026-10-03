@@ -206,6 +206,8 @@ class PhoneLayoutTests(IsolatedTestCase):
         self.commit(repo, "Drop y from util\n\nNothing reads it.", {"util.py": "x = 1\n"})
         self.run_session(repo, "now")
         self.write_records(fdir, tests_yaml=PHONE_TESTS_YAML)
+        brief = (fdir / "brief.md").read_text()
+        (fdir / "brief.md").write_text(brief.replace("review_first: []", 'review_first:\n  - {target: app, why: "Main changed"}'))
         for sid, title, path, deps in (("app", "App", "app.py", "[{system: util, relation: reads x}]"), ("util", "Util", "util.py", "[]")):
             self.write(fdir / "systems" / f"{sid}.md", (
                 f"---\nid: {sid}\ntitle: {title}\nchange: new\ndepends_on: {deps}\n"
@@ -316,6 +318,26 @@ class PhoneLayoutTests(IsolatedTestCase):
                              is_mobile=False, has_touch=False)
             self.assertTrue(wide.locator(".map-wrap svg").is_visible())
             self.assertFalse(wide.locator(".map-list").is_visible())
+            self.assertEqual(page.errors + wide.errors, [])
+
+    def test_narrow_screens_lead_with_what_to_review(self):
+        with sync_playwright() as p:
+            page = self.open(p, self.feature, ".feature-head")
+            targets = page.locator(".review-first:visible")
+            self.assertEqual(targets.count(), 1)
+            self.assertLess(targets.bounding_box()["y"], page.locator("h2", has_text="Intent").bounding_box()["y"])
+            # A system's connections come before its code once the columns stack.
+            page.goto(self.base + self.feature + "/system/app")
+            page.locator(".sys-code .hunk").first.wait_for()
+            self.assertLess(page.locator(".system-page > aside").bounding_box()["y"], page.locator(".sys-code").bounding_box()["y"])
+            wide = self.open(p, self.feature + "/system/app", ".sys-code .hunk", viewport={"width": 1280, "height": 800},
+                             is_mobile=False, has_touch=False)
+            aside, code = wide.locator(".system-page > aside").bounding_box(), wide.locator(".sys-code").bounding_box()
+            self.assertLess(code["x"] + code["width"], aside["x"])  # code stays in the left column
+            wide.goto(self.base + self.feature)
+            wide.locator(".feature-head").wait_for()
+            self.assertEqual(wide.locator("aside .review-first:visible").count(), 1)
+            self.assertEqual(wide.locator(".review-first:visible").count(), 1)
             self.assertEqual(page.errors + wide.errors, [])
 
     def test_search_and_help_suit_the_screen(self):

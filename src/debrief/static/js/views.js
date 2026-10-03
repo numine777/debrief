@@ -264,10 +264,22 @@
     return null;
   }
 
+  function reviewFirst(feature, targets, cls) {
+    return h("div", { class: ["aside-block", "review-first", cls] }, h("h3", null, "Review these first"),
+      targets.map((t) => {
+        const href = targetHref(feature, t.target);
+        return h(href ? "a" : "div", { class: "target", href },
+          h("div", { class: "target-name" }, t.target), t.why ? h("div", { class: "target-why" }, t.why) : null);
+      }));
+  }
+
   async function viewBrief(root, feature) {
     const ev = feature.evidence || {};
     const linker = codeLinker(feature);
     const main = h("div");
+    const targets = (feature.brief.meta.review_first || []);
+    // Where the columns stack, the targets lead instead of waiting below the whole brief.
+    if (targets.length) main.appendChild(reviewFirst(feature, targets, "narrow-only"));
     if (!feature.brief.exists) {
       main.appendChild(h("div", { class: "empty" }, h("h2", null, "No brief yet"),
         h("p", null, "The agent writes the brief when the developer asks it to close out a leg. Until then, the ",
@@ -282,15 +294,7 @@
       }
     }
     const aside = h("aside");
-    const targets = (feature.brief.meta.review_first || []);
-    if (targets.length) {
-      aside.appendChild(h("div", { class: "aside-block" }, h("h3", null, "Review these first"),
-        targets.map((t) => {
-          const href = targetHref(feature, t.target);
-          return h(href ? "a" : "div", { class: "target", href },
-            h("div", { class: "target-name" }, t.target), t.why ? h("div", { class: "target-why" }, t.why) : null);
-        })));
-    }
+    if (targets.length) aside.appendChild(reviewFirst(feature, targets, "wide-only"));
     const stats = ev.stats || {};
     const tests = ev.tests || [];
     const verified = tests.filter((t) => t.status === "verified_pass").length;
@@ -568,9 +572,10 @@
       h("div", { class: "facts chips" }, h("span", { class: "chip mono" }, system.id), h("span", { class: "chip" }, system.change || "touched")),
       system.sections.map((sec) => h("section", { class: "brief-section" }, sec.title ? h("h2", null, sec.title) : null,
         markdown(sec.markdown, { linkCode: linker }))));
+    main.classList.add("sys-prose");
     const codeHolder = h("div", null, h("p", { class: "loading" }, "Loading the code this system explains…"));
-    main.appendChild(sectionTitle("Code this system explains", `${plural(system.hunk_count, "hunk")} in ${plural(system.files.length, "file")}`));
-    main.appendChild(codeHolder);
+    const code = h("section", { class: "sys-code" },
+      sectionTitle("Code this system explains", `${plural(system.hunk_count, "hunk")} in ${plural(system.files.length, "file")}`), codeHolder);
 
     const aside = h("aside");
     if (system.critical_paths.length) {
@@ -618,7 +623,9 @@
       aside.appendChild(h("div", { class: "aside-block" }, h("h3", null, "Record issues"),
         h("ul", { class: "issues-list" }, system.issues.map((i) => h("li", null, i.message)))));
     }
-    root.appendChild(h("div", { class: "two-col" }, main, aside));
+    // Wide: prose then code on the left, the aside beside both. Stacked: prose, aside, then code,
+    // so critical paths and connections come before hundreds of lines of diff.
+    root.appendChild(h("div", { class: "system-page" }, main, aside, code));
     if (route.query && route.query.cp) {
       const el = document.getElementById("cp-" + route.query.cp);
       if (el) el.scrollIntoView({ block: "center" });
