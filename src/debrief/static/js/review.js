@@ -88,15 +88,23 @@
       card.appendChild(h("div", { class: "reply" }, h("div", { class: "comment-meta" }, h("strong", null, reply.author), h("span", { class: "when" }, ago(reply.created_at))),
         markdown(reply.body)));
     }
+    if (comment.visibility === "shared" && !readonly()) {
+      const replyBtn = h("button", { class: "btn small reply-btn", type: "button", onclick: () => {
+        replyBtn.replaceWith(composer({ submitLabel: "Reply", hideVisibility: true, onCancel: redraw,
+          onSubmit: async (body) => { await act({ reply: body }); } }));
+      } }, "Reply");
+      card.appendChild(replyBtn);
+    }
     return card;
   }
 
   function composer(opts) {
     const textarea = h("textarea", { rows: 3, placeholder: "Note for yourself, or feedback for the agent", "aria-label": "Comment" });
     textarea.value = opts.body || "";
-    const visibility = h("select", { "aria-label": "Who can see this" },
-      h("option", { value: "private" }, "Private: stays on this machine"),
-      h("option", { value: "shared" }, "Shared: syncs with the project's records"));
+    const hub = D.meta && D.meta.mode === "hub";
+    const visibility = h("select", { "aria-label": "Who can see this", hidden: opts.hideVisibility || null },
+      h("option", { value: "private" }, hub ? "Private: only you see it" : "Private: stays on this machine"),
+      h("option", { value: "shared" }, hub ? "Shared: the team and the agent's host see it" : "Shared: syncs with the project's records"));
     visibility.value = opts.visibility || D.prefs().commentVisibility || "private";
     const submit = async (evt) => {
       if (evt) evt.preventDefault();

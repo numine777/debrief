@@ -32,6 +32,10 @@
     D.setCrumbs([]);
     window.scrollTo(0, 0);
     try {
+      const meta = await D.data.meta();
+      D.meta = meta;
+      showUser(meta);
+      if (meta.mode === "hub" && !meta.user) { viewLogin(); return; }
       if (route.name === "index") await D.viewIndex(main);
       else if (route.name === "feature") await D.viewFeature(main, route);
       else if (route.name === "commit") await D.viewCommit(main, route);
@@ -40,6 +44,7 @@
       else clear(main).appendChild(D.errorBox({ status: 404, message: "That page doesn't exist. Go back to the feature list." }));
     } catch (err) {
       if (token !== renderToken) return;
+      if (err && err.status === 401) { D.invalidate(); viewLogin(); return; }
       clear(main).appendChild(D.errorBox(err));
       if (window.console) console.error(err);
     }
@@ -49,6 +54,44 @@
   function pageTitle() {
     const h1 = main.querySelector("h1");
     return h1 ? `${h1.textContent} · Debrief` : "Debrief";
+  }
+
+  // --- hub sign-in ----------------------------------------------------------------------------------
+  let userSlot;
+  function showUser(meta) {
+    if (!userSlot) return;
+    clear(userSlot);
+    const search = document.querySelector(".searchbox");
+    if (search) search.hidden = meta.mode === "hub" && !meta.user;
+    if (meta.mode !== "hub" || !meta.user) return;
+    userSlot.appendChild(h("span", { class: "small" }, meta.user.name));
+    userSlot.appendChild(h("button", { class: "btn small", type: "button", onclick: async () => {
+      try { await D.data.post("/api/v1/logout"); } catch (err) { /* already signed out */ }
+      D.invalidate();
+      render();
+    } }, "Sign out"));
+  }
+
+  function viewLogin() {
+    D.setCrumbs([]);
+    const input = h("input", { type: "password", autocomplete: "current-password", placeholder: "dbh_…", "aria-label": "Access token", required: true });
+    const message = h("p", { class: "small", role: "alert" });
+    const form = h("form", { class: "login", onsubmit: async (evt) => {
+      evt.preventDefault();
+      try {
+        await D.data.post("/api/v1/login", { token: input.value.trim() });
+        D.invalidate();
+        render();
+      } catch (err) {
+        message.textContent = err.status === 429 ? err.message : "That token isn't valid. Ask the hub's owner for a new one.";
+        input.select();
+      }
+    } },
+      h("h1", null, "Sign in to Debrief Hub"),
+      h("p", null, "Use the access token the hub's owner gave you (from ", h("code", null, "debrief hub adduser"), ")."),
+      input, h("button", { class: "btn primary", type: "submit" }, "Sign in"), message);
+    clear(main).appendChild(form);
+    input.focus();
   }
 
   D.rerender = render;
@@ -169,6 +212,7 @@
       h("a", { class: "wordmark", href: "#/" }, D.mark(), "Debrief"),
       crumbs, h("span", { class: "spacer" }),
       D.exported ? h("span", { class: "muted small" }, "Exported copy, read-only") : searchForm,
+      (userSlot = h("span", { class: "user-slot" })),
       h("button", { class: "iconbtn", type: "button", title: "Switch light and dark (t)", "aria-label": "Switch light and dark", onclick: toggleTheme }, D.icon("theme")),
       h("button", { class: "iconbtn", type: "button", title: "Keyboard shortcuts (?)", "aria-label": "Keyboard shortcuts", onclick: showHelp }, D.icon("help")));
     main = h("main", { id: "main", tabindex: "-1" });

@@ -165,3 +165,38 @@ class ViewerSmokeTests(IsolatedTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(sync_playwright is None, "Playwright is not installed")
+class HubUiTests(IsolatedTestCase):
+    def test_sign_in_then_browse(self):
+        from debrief.hub import Hub, make_hub_server
+
+        hub = Hub(self.tmp / "hub")
+        hub.init("localhost")
+        token = hub.add_user("alice", admin=True)
+        server = make_hub_server(hub, "127.0.0.1", 0, None, None, insecure_http=True)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page()
+                errors = []
+                page.on("pageerror", lambda err: errors.append(str(err)))
+                page.goto(f"http://127.0.0.1:{port}/")
+                page.locator("form.login").wait_for()
+                page.locator("form.login input").fill("dbh_wrong")
+                page.locator("form.login button").click()
+                page.locator("text=That token isn't valid").wait_for()
+                page.locator("form.login input").fill(token)
+                page.locator("form.login button").click()
+                page.locator("main", has_text="Features").wait_for()
+                self.assertIn("alice", page.inner_text("header"))
+                page.locator("button", has_text="Sign out").click()
+                page.locator("form.login").wait_for()
+                browser.close()
+            self.assertEqual(errors, [])
+        finally:
+            server.shutdown()
+            server.server_close()

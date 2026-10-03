@@ -462,6 +462,11 @@ tr.comment-row td, tr.composer-row td { background: var(--paper); padding: 0.45r
 .comment-item { display: grid; grid-template-columns: 1.4rem minmax(0, 1fr); gap: 0.5rem; padding: 0.6rem 0; border-bottom: 1px solid var(--rule); align-items: start; }
 .comment-item input { margin-top: 0.3rem; }
 pre.quoted { margin: 0.3rem 0; padding: 0.3rem 0.6rem; background: var(--sheet-2); border-left: 3px solid var(--rule-strong); font-size: var(--s-13); white-space: pre-wrap; overflow-wrap: anywhere; }
+.reply-btn { margin-top: 0.4rem; }
+.user-slot { display: inline-flex; gap: 0.5rem; align-items: center; }
+.login { max-width: 28rem; margin: 3rem auto; display: grid; gap: 0.8rem; }
+.login input { padding: 0.5rem 0.6rem; border: 1px solid var(--rule-strong); border-radius: var(--radius); font-family: var(--font-code); background: var(--sheet); }
+.login p { font-family: var(--font-prose); margin: 0; }
 .notice { position: fixed; right: 1.2rem; bottom: 1.2rem; z-index: 40; background: var(--sheet); border: 1px solid var(--focus); border-radius: var(--radius); padding: 0.6rem 0.8rem; display: flex; gap: 0.5rem; align-items: center; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15); font-size: var(--s-14); }
 
 /* --- queue ------------------------------------------------------------------------------------ */
