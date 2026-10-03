@@ -246,6 +246,8 @@ def _blob_text(feature_dir: Path, blob: Optional[str]) -> Optional[str]:
 def locate(comments: List[dict], feature_dir: Path, evidence: dict) -> List[dict]:
     """Add ``current`` to each comment: its line at the feature head, or outdated."""
     files = {f["path"]: f for f in evidence.get("files") or []}
+    # A removed line is anchored at the file's old path, which differs from its key when the file was renamed.
+    old_files = {f["old_path"]: f for f in evidence.get("files") or [] if f.get("old_path")}
     head = evidence.get("head")
     cache: Dict[Tuple[str, str], Dict[int, int]] = {}
     out = []
@@ -254,11 +256,14 @@ def locate(comments: List[dict], feature_dir: Path, evidence: dict) -> List[dict
         path = anchor.get("path")
         line = anchor.get("line")
         current = {"line": None, "outdated": True, "moved": False, "head": head}
-        f = files.get(path)
         if anchor.get("side") == "old":
+            f = old_files.get(path) or files.get(path)
             if f and (not anchor.get("blob") or anchor.get("blob") == f.get("old_blob")):
-                current.update(line=line, outdated=False)
-        elif f and f.get("new_blob"):
+                current.update(line=line, outdated=False, path=f.get("path"))
+            out.append(dict(comment, current=current))
+            continue
+        f = files.get(path)
+        if f and f.get("new_blob"):
             now_blob = f["new_blob"]
             if anchor.get("blob") in (None, "", now_blob):
                 current.update(line=line, outdated=False)
@@ -296,7 +301,10 @@ def build_prompt(comments: List[dict], feature: dict, head: Optional[str]) -> st
         path = anchor.get("path")
         reviewed_at = (anchor.get("commit") or "")[:7] or "an earlier head"
         if anchor.get("side") == "old":
-            where = f"{path} (removed line {anchor.get('line')}, as reviewed at {reviewed_at})"
+            now_at = current.get("path")
+            where = (f"{now_at} (renamed from {path}; removed line {anchor.get('line')} of the old file, "
+                     f"as reviewed at {reviewed_at})" if now_at and now_at != path else
+                     f"{path} (removed line {anchor.get('line')}, as reviewed at {reviewed_at})")
         elif current.get("outdated"):
             where = f"{path} (was line {anchor.get('line')} when reviewed at {reviewed_at}; that line has since changed)"
         elif current.get("moved"):

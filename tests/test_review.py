@@ -94,6 +94,22 @@ class ReviewLoopTests(IsolatedTestCase):
         self.assertEqual(data["comment"]["visibility"], "private")
         self.assertEqual(json.loads((self.fdir / "comments.json").read_text())["comments"], [])
 
+    def test_removed_line_comment_on_a_renamed_file(self):
+        renamed = BASE_TEXT.replace("line 5\n", "line five\n").replace("line 15\n", "")
+        git(self.repo, "mv", "app.py", "renamed.py")
+        self.commit(self.repo, "Rename and drop line 15\n\nBody.", {"renamed.py": renamed})
+        self.run_session(self.repo, "now")
+        ev = ingest.ingest_feature(self.pid, "feat--review")
+        f = [f for f in ev["files"] if f["path"] == "renamed.py"][0]
+        self.assertEqual(f["old_path"], "app.py")
+        anchor = {"scope": "feature", "path": "app.py", "side": "old", "line": 15, "text": "line 15",
+                  "commit": ev["head_commit"], "blob": f["old_blob"]}
+        c = comments.create(self.pid, "feat--review", {"anchor": anchor, "body": "Why drop it?"}, "dev", self.archive)
+        [found] = comments.locate([dict(c, visibility="private")], self.fdir, ev)
+        self.assertFalse(found["current"]["outdated"])  # it used to be outdated from the start
+        prompt = comments.build_prompt([found], {"branch": "feat/review"}, ev["head_commit"])
+        self.assertIn("renamed.py (renamed from app.py; removed line 15 of the old file", prompt)
+
     def test_comments_follow_moved_lines_and_go_outdated(self):
         c_move = comments.create(self.pid, "feat--review", {"anchor": self.anchor(10, "line 10"), "body": "a"}, "dev", self.archive)
         c_gone = comments.create(self.pid, "feat--review", {"anchor": self.anchor(5, "line five"), "body": "b"}, "dev", self.archive)
