@@ -5,6 +5,7 @@ import re
 import threading
 import unittest
 import urllib.request
+from unittest import mock
 from pathlib import Path
 
 from tests.helpers import ROOT, IsolatedTestCase, git
@@ -131,6 +132,39 @@ class ServerTests(IsolatedTestCase):
         finally:
             server.shutdown()
             server.server_close()
+
+    def test_bad_content_length_is_refused_before_reading(self):
+        import socket
+
+        server = make_server(0, root=self.archive)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        def send(header: bytes) -> bytes:
+            # The old server read a negative length "to the end" and never answered (recv times out).
+            with socket.create_connection(("127.0.0.1", port), timeout=10) as sock:
+                sock.sendall(f"POST /api/v1/meta HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n".encode() + header + b"\r\n\r\n")
+                return sock.recv(200)
+
+        self.assertIn(b" 400 ", send(b"Content-Length: -1"))
+        self.assertIn(b" 400 ", send(b"Content-Length: abc"))
+        self.assertIn(b" 400 ", send(b"Content-Length: \xb2"))  # superscript two: isdigit() but not a number
+        self.assertIn(b" 411 ", send(b"Transfer-Encoding: chunked"))
+        self.assertIn(b" 413 ", send(b"Content-Length: 1000000000"))
+
+    def test_odd_requests_get_clean_errors(self):
+        self.assertEqual(get(self.app, "/static/%00").status, 404)
+        self.assertEqual(get(self.app, "/static/js\\..\\app.js").status, 404)
+        # An internal error names a log reference, never the exception.
+        self.app.add("GET", r"/api/v1/boom", lambda req: 1 / 0)
+        with mock.patch("sys.stderr") as log:
+            resp = get(self.app, "/api/v1/boom")
+        self.assertIn("ZeroDivisionError", "".join(c.args[0] for c in log.write.call_args_list))
+        self.assertEqual(resp.status, 500)
+        self.assertNotIn("ZeroDivisionError", body(resp)["error"])
+        self.assertIn("logged as", body(resp)["error"])
 
 
 class OfflineTests(unittest.TestCase):

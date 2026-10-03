@@ -14,8 +14,11 @@ import hashlib
 import json
 import mimetypes
 import re
+import secrets
+import socket
 import sys
 import threading
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -143,8 +146,10 @@ class App:
             return self.finish(req, Response.error(400, str(exc)))
         except PermissionError as exc:
             return self.finish(req, Response.error(403, str(exc)))
-        except Exception as exc:  # report, never crash the server thread
-            return self.finish(req, Response.error(500, f"{type(exc).__name__}: {exc}"))
+        except Exception:  # log the details on the server, never crash the thread or show internals
+            ref = secrets.token_hex(4)
+            sys.stderr.write(f"debrief: internal error {ref} on {req.method} {req.path}\n{traceback.format_exc()}")
+            return self.finish(req, Response.error(500, f"Debrief hit an internal error (logged as {ref})."))
 
     def check_request(self, req: Request) -> Optional[Response]:
         host = req.headers.get("host", "")
@@ -172,13 +177,13 @@ class App:
 
     def static(self, rel: str) -> Response:
         rel = rel.lstrip("/")
-        if ".." in rel.split("/") or rel.startswith("."):
+        if ".." in rel.split("/") or rel.startswith(".") or "\x00" in rel or "\\" in rel:
             return Response.error(404, "not found")
         cached = self._static_cache.get(rel)
         if cached is None:
             try:
                 data = resources.read_bytes(f"static/{rel}")
-            except (FileNotFoundError, OSError):
+            except (OSError, ValueError, KeyError):
                 return Response.error(404, "not found")
             ext = "." + rel.rsplit(".", 1)[-1] if "." in rel else ""
             ctype = STATIC_TYPES.get(ext) or mimetypes.guess_type(rel)[0] or "application/octet-stream"
@@ -218,13 +223,28 @@ class Handler(BaseHTTPRequestHandler):
     server_version = f"Debrief/{__version__}"
     sys_version = ""
     protocol_version = "HTTP/1.1"
+    # Idle or slow connections give their thread back instead of holding it forever.
+    timeout = 60
 
     def _dispatch(self) -> None:
-        length = int(self.headers.get("Content-Length") or 0)
+        # The body is read before any authentication, so its size is checked first:
+        # a missing length means no body, and anything but a plain decimal number
+        # within MAX_BODY is refused without reading.
+        if self.headers.get("Transfer-Encoding"):
+            self.send_error(411, "send a Content-Length; chunked request bodies aren't accepted")
+            return
+        raw = (self.headers.get("Content-Length") or "0").strip()
+        if not raw.isdigit() or not raw.isascii():
+            self.send_error(400, "invalid Content-Length")
+            return
+        length = int(raw)
         if length > MAX_BODY:
             self.send_error(413, "request body too large")
             return
         body = self.rfile.read(length) if length else b""
+        if len(body) != length:
+            self.close_connection = True
+            return
         req = Request(self.command, self.path, dict(self.headers.items()), body, self.client_address[0])
         resp = self.server.app.handle(req)  # type: ignore[attr-defined]
         self.send_response(resp.status)
@@ -250,6 +270,13 @@ class Server(ThreadingHTTPServer):
         super().__init__(address, Handler)
         self.app = app
         self.verbose = verbose
+
+    def handle_error(self, request, client_address) -> None:
+        """A client that hangs up or stalls is routine; anything else is reported."""
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionError, TimeoutError, socket.timeout)):
+            return
+        super().handle_error(request, client_address)
 
 
 def make_server(port: int, root=None, host: str = "127.0.0.1", readonly: bool = False) -> Server:
