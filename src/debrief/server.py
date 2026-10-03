@@ -253,23 +253,10 @@ class Server(ThreadingHTTPServer):
 
 
 def make_server(port: int, root=None, host: str = "127.0.0.1", readonly: bool = False) -> Server:
+    from .review import ReviewApp
+
     api = Api(root, mode="local", readonly=readonly)
-    app = ReviewApp(api, port) if _review_available() else App(api, port)
-    return Server((host, port), app)
-
-
-def _review_available() -> bool:
-    try:
-        from . import review  # noqa: F401
-    except ImportError:
-        return False
-    return True
-
-
-def ReviewApp(api: Api, port: int) -> App:  # noqa: N802 (factory reads like a class)
-    from .review import ReviewApp as _ReviewApp
-
-    return _ReviewApp(api, port)
+    return Server((host, port), ReviewApp(api, port))
 
 
 def cli(args) -> int:
