@@ -99,6 +99,9 @@ code, pre, .mono { font-family: var(--font-code); }
 /* Agent and reviewer prose can hold long unbroken URLs and SHAs: they wrap instead of widening the page. */
 .prose, .comment, .reply, .quoted, .claim { overflow-wrap: anywhere; }
 [hidden] { display: none !important; }
+/* Pieces rendered twice, once for phones and once for wider screens; only one is ever displayed. */
+@media (min-width: 641px) { .phone-only { display: none !important; } }
+@media (max-width: 640px) { .not-phone { display: none !important; } }
 
 /* --- top bar ------------------------------------------------------------------ */
 .topbar {
@@ -339,6 +342,21 @@ svg.focused .map-edge:not(.hot) { opacity: 0.25; }
 .map-edge.hot .label { fill: var(--ink); opacity: 1; }
 .map-legend { display: flex; flex-wrap: wrap; gap: 1rem; font-size: var(--s-13); color: var(--ink-2); margin: 0.5rem 0 0.8rem; align-items: center; }
 .map-legend svg { vertical-align: middle; }
+/* The phone map: layers top to bottom, cards framed like map nodes, dependencies as labelled arrows. */
+.map-list, .map-list ul { list-style: none; margin: 0; padding: 0; }
+.map-layer { padding: 0.7rem 0; }
+.map-layer + .map-layer { border-top: 1px dashed var(--rule-strong); }
+.map-layer > ul { display: grid; gap: 0.6rem; }
+.map-card { background: var(--sheet); border: 1.5px solid var(--ink-2); border-radius: 2px; padding: 0.6rem 0.75rem; }
+.map-card.change-new { border: 2.6px solid var(--ink); }
+.map-card.change-touched { border-style: dashed; border-color: var(--ink-3); }
+.map-card .title { font-weight: 600; font-size: var(--s-16); }
+.map-card .mono, .map-card .meta { font-size: var(--s-12); color: var(--ink-3); }
+.map-card .deps { margin-top: 0.4rem; border-top: 1px solid var(--rule); padding-top: 0.35rem; font-size: var(--s-13); }
+.map-card .deps li { display: flex; flex-wrap: wrap; gap: 0 0.45rem; align-items: baseline; padding: 0.1rem 0; }
+.map-card .deps .arrow { color: var(--ink-3); }
+.map-card .deps .mono { font-size: var(--s-13); color: var(--ink); }
+.map-card .deps .rel { font-family: var(--font-prose); font-style: italic; color: var(--ink-3); }
 
 /* --- tables (systems, tests) ------------------------------------------------------------------ */
 table.grid { border-collapse: collapse; width: 100%; background: var(--sheet); border: 1px solid var(--rule); font-size: var(--s-14); }

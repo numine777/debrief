@@ -468,13 +468,37 @@
     return svg;
   }
 
+  // The map on a phone, where a wide drawing would show a sliver: the same layers read top to
+  // bottom, each system a card framed like its map node and listing what it depends on.
+  function systemList(systems, opts) {
+    const byId = new Map(systems.map((s) => [s.id, s]));
+    const edges = [];
+    for (const s of systems) for (const dep of s.depends_on || []) if (byId.has(dep.system) && dep.system !== s.id) edges.push({ from: s.id, to: dep.system });
+    const layers = layout(systems.map((s) => ({ id: s.id })), edges);
+    return h("ol", { class: ["map-list", opts.class], "aria-label": `System map: ${plural(systems.length, "system")}, each above what it depends on` },
+      layers.map((row) => h("li", { class: "map-layer" }, h("ul", null, row.map((id) => {
+        const s = byId.get(id);
+        const deps = (s.depends_on || []).filter((d) => byId.has(d.system) && d.system !== id);
+        const cps = (s.critical_paths || []).length;
+        const meta = [s.change || "touched", s.hunk_count !== undefined ? plural(s.hunk_count, "hunk") : null, cps ? plural(cps, "critical path") : null];
+        return h("li", { class: ["map-card", "change-" + (s.change || "touched")] },
+          h("a", { class: "title", href: opts.href(id) }, s.title || id),
+          h("div", { class: "mono" }, id),
+          h("div", { class: "meta" }, meta.filter(Boolean).join(", ")),
+          deps.length ? h("ul", { class: "deps", "aria-label": "Depends on" }, deps.map((d) => h("li", null,
+            h("span", { class: "arrow", "aria-hidden": "true" }, "→"), h("a", { class: "mono", href: opts.href(d.system) }, d.system),
+            d.relation ? h("span", { class: "rel" }, d.relation) : null))) : null);
+      })))));
+  }
+
   function mapLegend() {
     const frame = (cls) => h("svg", { width: 30, height: 16, viewBox: "0 0 30 16", "aria-hidden": "true" },
       h("rect", { x: 1, y: 1, width: 28, height: 14, rx: 1.5, fill: "var(--sheet)", stroke: cls === "new" ? "var(--ink)" : cls === "touched" ? "var(--ink-3)" : "var(--ink-2)",
         "stroke-width": cls === "new" ? 2.6 : 1.5, "stroke-dasharray": cls === "touched" ? "4 3" : null }));
     return h("div", { class: "map-legend" },
       h("span", null, frame("new"), " New system"), h("span", null, frame("modified"), " Modified"), h("span", null, frame("touched"), " Touched"),
-      h("span", null, "Arrows point from a system to what it depends on."));
+      h("span", { class: "not-phone" }, "Arrows point from a system to what it depends on."),
+      h("span", { class: "phone-only" }, "Each system sits above what it depends on, listed under its name."));
   }
 
   async function viewMap(root, feature) {
@@ -485,7 +509,8 @@
     }
     const base = fpath(feature.project.project_id, feature.feature_id);
     root.appendChild(mapLegend());
-    root.appendChild(h("div", { class: "map-wrap" }, systemMap(feature.systems, { onPick: (sid) => { location.hash = `${base}/system/${enc(sid)}`; } })));
+    root.appendChild(h("div", { class: "map-wrap not-phone" }, systemMap(feature.systems, { onPick: (sid) => { location.hash = `${base}/system/${enc(sid)}`; } })));
+    root.appendChild(systemList(feature.systems, { class: "phone-only", href: (sid) => `${base}/system/${enc(sid)}` }));
   }
 
   // --- systems ----------------------------------------------------------------------------------------
@@ -1078,8 +1103,10 @@
     if (seen.size) {
       root.appendChild(sectionTitle("Systems across the epic", plural(seen.size, "system")));
       root.appendChild(mapLegend());
-      root.appendChild(h("div", { class: "map-wrap" }, systemMap(Array.from(seen.values()), {
-        onPick: (sid) => { const s = seen.get(sid); location.hash = `${fpath(s.feature.project_id, s.feature.feature_id)}/system/${enc(sid)}`; } })));
+      const href = (sid) => { const s = seen.get(sid); return `${fpath(s.feature.project_id, s.feature.feature_id)}/system/${enc(sid)}`; };
+      root.appendChild(h("div", { class: "map-wrap not-phone" }, systemMap(Array.from(seen.values()), {
+        onPick: (sid) => { location.hash = href(sid); } })));
+      root.appendChild(systemList(Array.from(seen.values()), { class: "phone-only", href }));
     }
   }
 

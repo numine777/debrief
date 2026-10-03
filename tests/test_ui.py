@@ -301,6 +301,23 @@ class PhoneLayoutTests(IsolatedTestCase):
             self.assertTrue(wide.locator("table.tests-table thead").is_visible())
             self.assertEqual(page.errors + wide.errors, [])
 
+    def test_map_becomes_a_layered_list(self):
+        with sync_playwright() as p:
+            page = self.open(p, self.feature + "/map", ".map-legend")
+            self.assertFalse(page.locator(".map-wrap").is_visible())
+            cards = page.locator(".map-list .map-card")
+            self.assertEqual(cards.count(), 2)
+            # App depends on Util, so App's layer comes first and its card names the dependency.
+            self.assertIn("App", cards.nth(0).inner_text())
+            self.assertIn("reads x", cards.nth(0).locator(".deps").inner_text())
+            cards.nth(0).locator(".deps a", has_text="util").click()
+            page.locator("h2.system-title", has_text="Util").wait_for()
+            wide = self.open(p, self.feature + "/map", ".map-legend", viewport={"width": 1280, "height": 800},
+                             is_mobile=False, has_touch=False)
+            self.assertTrue(wide.locator(".map-wrap svg").is_visible())
+            self.assertFalse(wide.locator(".map-list").is_visible())
+            self.assertEqual(page.errors + wide.errors, [])
+
     def test_search_and_help_suit_the_screen(self):
         with sync_playwright() as p:
             page = self.open(p, self.feature, ".feature-head")
