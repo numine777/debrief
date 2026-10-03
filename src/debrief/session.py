@@ -706,71 +706,99 @@ def feature_base(ctx: Context) -> Optional[str]:
     return _initial_base(ctx)
 
 
-def explanation_index(feature_dir: Path) -> Tuple[Dict[str, List[Tuple[str, str]]], List[str]]:
-    """Map path -> [(system id, strength)] from system anchors, plus incidental paths."""
-    feature = records.load_feature(feature_dir)
-    by_path: Dict[str, List[Tuple[str, str]]] = {}
-    for system in feature["systems"]:
-        sid = system["meta"]["id"]
-        anchors = list(system["meta"]["anchors"])
-        anchors += [cp["anchor"] for cp in system["meta"]["critical_paths"] if cp.get("anchor")]
-        for anchor in anchors:
-            by_path.setdefault(anchor["path"], []).append((sid, records.anchor_strength(anchor)))
-    if feature.get("tests"):
-        for test in feature["tests"]["tests"]:
-            for anchor in test["anchors"]:
-                by_path.setdefault(anchor["path"], []).append((f"tests/{test['id']}", records.anchor_strength(anchor)))
-    incidental = list((feature.get("brief") or {}).get("meta", {}).get("incidental", []))
-    return by_path, incidental
+def _evidence(ctx: Context) -> Tuple[Optional[dict], Optional[str]]:
+    """Compute the feature's evidence now (it lives in the archive). Returns (evidence, problem)."""
+    from . import ingest
+
+    try:
+        return ingest.ingest_feature(ctx.project_id, ctx.feature_id, repo=ctx.repo_root), None
+    except Exception as exc:  # evidence must never block the agent
+        return None, f"evidence not computed: {exc}"
+
+
+def _ranges(lines: List[int]) -> str:
+    return ", ".join(str(n) for n in lines[:6]) + (" ..." if len(lines) > 6 else "")
+
+
+def explain_file(f: dict) -> str:
+    """What explains one changed file, hunk by hunk, as `bin/session changed` prints it."""
+    hunks = f.get("hunks") or []
+    strong = sorted({c["by"] for h in hunks for c in h.get("claims", []) if c.get("strength") == "strong"})
+    open_lines: List[int] = []
+    weak = set()
+    for h in hunks:
+        if h["state"] == "unclaimed" and not h.get("whitespace_only"):
+            blocks = [b for b in h.get("blocks") or [] if b["state"] == "unclaimed"]
+            if blocks:
+                open_lines += [(b["new"] or b["old"] or [h.get("new_start")])[0] for b in blocks]
+            else:
+                open_lines.append(h.get("new_start") or h.get("old_start") or 1)
+        elif h["state"] == "weak":
+            weak.update(c["by"] for c in h.get("claims", []))
+    if open_lines:
+        where = "NOT EXPLAINED" + (f" at line {_ranges(open_lines)}" if f.get("status") != "D" else "")
+        return where + (f"; the rest by {', '.join(strong)}" if strong else "")
+    if weak:
+        return "path anchor only (weak): " + ", ".join(sorted(weak))
+    if strong:
+        return "explained by " + ", ".join(strong)
+    if f.get("noise"):
+        return f"incidental ({f['noise']})"
+    return "incidental"
+
+
+def unexplained(evidence: Optional[dict]) -> List[str]:
+    """``path`` or ``path:lines`` for every changed file with a hunk nothing explains."""
+    out = []
+    for f in (evidence or {}).get("files") or []:
+        why = explain_file(f)
+        if not why.startswith("NOT EXPLAINED"):
+            continue
+        lines = why.split(" at line ", 1)[1].split(";")[0] if " at line " in why else ""
+        out.append(f"{f['path']}:{lines}" if lines else f["path"])
+    return out
 
 
 def changed_files(ctx: Context) -> Tuple[Optional[str], List[Tuple[str, str]], List[Tuple[str, str]]]:
     """(feature base, committed changes since base, uncommitted changes)."""
     base = feature_base(ctx)
     committed: List[Tuple[str, str]] = []
-    if base and ctx.head:
-        committed = gitutil.name_status(ctx.repo_root, base, ctx.head)
+    if ctx.head:
+        committed = gitutil.name_status(ctx.repo_root, base or gitutil.empty_tree(ctx.repo_root), ctx.head)
     uncommitted = [(code.strip() or "?", path) for code, path in gitutil.status_porcelain(ctx.repo_root)]
     return base, committed, uncommitted
 
 
-def describe_explanations(ctx: Context, files: List[str]) -> List[Tuple[str, str]]:
-    by_path, incidental = explanation_index(ctx.feature_dir)
-    rows = []
-    for path in files:
-        claims = by_path.get(path, [])
-        strong = sorted({sid for sid, strength in claims if strength == "strong"})
-        weak = sorted({sid for sid, strength in claims if strength == "weak"})
-        if strong:
-            rows.append((path, "explained by " + ", ".join(strong)))
-        elif records.is_incidental(path, incidental):
-            rows.append((path, "incidental"))
-        elif weak:
-            rows.append((path, "path anchor only (weak): " + ", ".join(weak)))
-        else:
-            rows.append((path, "NOT EXPLAINED"))
-    return rows
-
-
 def cmd_changed(ctx: Context, args) -> int:
+    """List what the feature changed and what explains each file, from freshly computed evidence."""
     base, committed, uncommitted = changed_files(ctx)
     leg = open_leg(ctx)
     leg_files = set()
-    if leg and leg.get("base_ref") and ctx.head:
-        leg_files = {p for _, p in gitutil.name_status(ctx.repo_root, leg["base_ref"], ctx.head)}
-    print(f"Feature {ctx.feature_id}: {base[:9] if base else '?'}..{(ctx.head or '?')[:9]}"
+    if leg and ctx.head:
+        leg_base = leg.get("base_ref") or gitutil.empty_tree(ctx.repo_root)
+        leg_files = {p for _, p in gitutil.name_status(ctx.repo_root, leg_base, ctx.head)}
+    print(f"Feature {ctx.feature_id}: {base[:9] if base else '(start)'}..{(ctx.head or '?')[:9]}"
           + (f", {leg['leg_id']} open" if leg else ", no open leg"))
-    if committed:
-        rows = describe_explanations(ctx, [p for _, p in committed])
-        width = max(len(p) for p, _ in rows)
-        print("Committed changes (* = changed in the open leg):")
-        for (code, _path), (path, why) in zip(committed, rows):
-            mark = "*" if path in leg_files else " "
-            print(f" {mark}{code[:1]} {path.ljust(width)}  {why}")
-        missing = [p for p, why in rows if why == "NOT EXPLAINED"]
+    evidence, problem = _evidence(ctx) if ctx.feature_dir.exists() else (None, None)
+    files = (evidence or {}).get("files") or []
+    if problem:
+        print(f"({problem})")
+    elif evidence and evidence.get("stale_note"):
+        print(f"({evidence['stale_note']})")
+    if files:
+        width = max(len(f["path"]) for f in files)
+        print("Changes (* = changed in the open leg), judged hunk by hunk:")
+        for f in files:
+            mark = "*" if f["path"] in leg_files else " "
+            print(f" {mark}{(f.get('status') or 'M')[:1]} {f['path'].ljust(width)}  {explain_file(f)}")
+        missing = unexplained(evidence)
         if missing:
-            print(f"{util.human_count(len(missing), 'file')} not explained: anchor each from a system "
-                  "by symbol or line range, or list it under `incidental` in brief.md.")
+            print(f"{util.human_count(len(missing), 'file')} with unexplained changes: anchor each changed line from a "
+                  "system (symbol or line range), or list the file under `incidental` in brief.md.")
+        print(ingest_summary(evidence))
+    elif committed:
+        for code, path in committed:
+            print(f"  {code[:1]} {path}")
     else:
         print("No committed changes since the feature base.")
     if uncommitted:
@@ -778,6 +806,12 @@ def cmd_changed(ctx: Context, args) -> int:
         for code, path in uncommitted:
             print(f"  {code:>2} {path}")
     return 0
+
+
+def ingest_summary(evidence: dict) -> str:
+    from . import ingest
+
+    return ingest.summary_line(evidence)
 
 
 def _close_session(ctx: Context, sid: str, meta: dict, status: str) -> List[dict]:
@@ -821,20 +855,23 @@ def cmd_publish(ctx: Context, args) -> int:
     if not leg:
         print(f"No open leg for feature {ctx.feature_id}; nothing to publish.")
         return 1
-    tracked_dirty = [p for c, p in gitutil.status_porcelain(ctx.repo_root) if c != "??"]
-    if tracked_dirty and not args.force:
+    status = gitutil.status_porcelain(ctx.repo_root)
+    tracked_dirty = [p for c, p in status if c != "??"]
+    untracked = [p for c, p in status if c == "??"]
+    if (tracked_dirty or untracked) and not args.force:
         print("Refusing to publish: commit the remaining code first (closeout step 1):")
         for path in tracked_dirty[:20]:
             print(f"  {path}")
+        for path in untracked[:20]:
+            print(f"  {path} (untracked: commit it if it belongs to the change, or delete it)")
         print("Pass --force to publish with uncommitted changes.")
         return 1
     feature = records.load_feature(ctx.feature_dir)
-    errors = records.closeout_issues(feature)
+    _base, committed, _uncommitted = changed_files(ctx)
+    errors = records.closeout_issues(feature, code_changed=bool(committed))
     warnings = records.all_issues(feature)
     errors += [w for w in warnings if w["level"] == "error"]
     warnings = [w for w in warnings if w["level"] != "error"]
-    _base, committed, _uncommitted = changed_files(ctx)
-    unexplained = [p for p, why in describe_explanations(ctx, [p for _, p in committed]) if why == "NOT EXPLAINED"]
     if errors and not args.force:
         print("Refusing to publish; fix these first (or pass --force):")
         for item in errors:
@@ -855,19 +892,12 @@ def cmd_publish(ctx: Context, args) -> int:
         save_leg(ctx, leg)
     if sid:
         _set_current(ctx, None)
-    evidence_note = None
-    try:
-        from . import ingest  # noqa: WPS433 (optional until the ingest module exists)
-
-        result = ingest.ingest_feature(ctx.project_id, ctx.feature_id, repo=ctx.repo_root)
-        evidence_note = ingest.summary_line(result)
-    except ImportError:
-        evidence_note = None
-    except Exception as exc:  # evidence must never block a closeout
-        evidence_note = f"evidence not computed: {exc}"
+    evidence, evidence_note = _evidence(ctx)
+    if evidence is not None:
+        evidence_note = evidence.get("stale_note") or ingest_summary(evidence)
     title = ((feature.get("brief") or {}).get("meta") or {}).get("title") or ctx.feature_id
     message = f"Close {leg['leg_id']} of {ctx.feature_id}: {title}"
-    sync = archive.sync(ctx.project_dir, message)
+    sync = archive.sync(ctx.project_dir, message, timeout=PUBLISH_NETWORK_TIMEOUT)
     print(f"Published {leg['leg_id']} of {ctx.feature_id}.")
     if sync.get("committed"):
         print(f"  archive commit {sync['committed'][:9]}")
@@ -881,8 +911,9 @@ def cmd_publish(ctx: Context, args) -> int:
         print(f"{util.human_count(len(warnings), 'record warning')} (run `debrief check` for all):")
         for item in warnings[:12]:
             print(f"  {item['record']}: {item['message']}")
-    if unexplained:
-        print("Changed files nothing explains: " + ", ".join(unexplained[:15]))
+    missing = unexplained(evidence)
+    if missing:
+        print("Changes nothing explains: " + ", ".join(missing[:15]))
     return 0
 
 

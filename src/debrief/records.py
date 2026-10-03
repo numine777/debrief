@@ -691,12 +691,12 @@ def all_issues(feature: dict) -> List[dict]:
     return found
 
 
-def closeout_issues(feature: dict) -> List[dict]:
-    """What a finished closeout must contain, as errors."""
+def closeout_issues(feature: dict, code_changed: bool = True) -> List[dict]:
+    """What a finished closeout must contain, as errors. A feature that changed no code needs no systems."""
     problems = []
     if not feature.get("brief"):
         problems.append(issue("error", "brief.md", "missing: write the brief (closeout step 5)"))
-    if not feature.get("systems"):
+    if code_changed and not feature.get("systems"):
         problems.append(issue("error", "systems/", "no system files: describe each mechanism (closeout step 2)"))
     if feature.get("tests") is None:
         problems.append(issue("error", "tests.yaml", "missing: list test groups and gaps (closeout step 3)"))

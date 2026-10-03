@@ -216,6 +216,26 @@ class ProtocolFixTests(SessionFixture):
         self.assertNotIn("Traceback", proc.stderr)
         self.assertNotIn("BrokenPipe", proc.stderr)
 
+    def test_closeout_in_a_later_turn_records_its_work(self):
+        # Turn 1: work, hand off, close (the Finish rule).
+        self.run_session(self.repo, "start")
+        self.commit(self.repo, "Feature work\n\nBody.", {"app.py": "def main():\n    return 2\n"})
+        self.append_journal(self.fdir, "handoff", "Done for now.")
+        self.run_session(self.repo, "close")
+        # Turn 2: the developer asks for closeout; the skill opens its own session first.
+        self.run_session(self.repo, "start", "--task", "Close out the leg")
+        self.commit(self.repo, "Closeout fix\n\nBody.", {"app.py": "def main():\n    return 3\n"})
+        out = self.run_session(self.repo, "run", "true")
+        self.assertNotIn("not recorded", out)
+        self.write_records(self.fdir)
+        self.append_journal(self.fdir, "handoff", "Closed out.")
+        out = self.run_session(self.repo, "publish")  # publish closes the session itself
+        self.assertEqual(self.last_code, 0, out)
+        logged = [c["subject"] for c in self.legs()[0]["commits"]]
+        self.assertEqual(logged, ["Feature work", "Closeout fix"])
+        statuses = [json.loads(p.read_text())["status"] for p in self.fdir.glob("sessions/*/session.json")]
+        self.assertEqual(sorted(statuses), ["complete", "complete"])
+
     def test_detached_head_keeps_its_session(self):
         git(self.repo, "checkout", "-q", "--detach")
         self.run_session(self.repo, "start")
@@ -240,6 +260,40 @@ class ProtocolFixTests(SessionFixture):
         features = sorted(p.name for p in (self.archive / "projects" / self.pid / "features").iterdir())
         self.assertEqual(len(features), 2, features)
         self.assertIn(f"feature  {features[1]} (branch feat/a@b)", out)
+
+    def test_publish_refuses_untracked_files(self):
+        self.run_session(self.repo, "start")
+        self.commit(self.repo, "Change\n\nBody.", {"app.py": "def main():\n    return 2\n"})
+        self.write_records(self.fdir)
+        self.write(self.repo / "extra.py", "while True:\n    pass\n")
+        out = self.run_session(self.repo, "publish")
+        self.assertEqual(self.last_code, 1)
+        self.assertIn("extra.py (untracked", out)
+
+    def test_a_leg_without_code_changes_needs_no_systems(self):
+        self.run_session(self.repo, "start", "--task", "Investigate the flaky test")
+        self.write_records(self.fdir, systems=[])
+        for path in (self.fdir / "systems").glob("*.md"):
+            path.unlink()
+        self.append_journal(self.fdir, "handoff", "Found the cause; no code changed.")
+        out = self.run_session(self.repo, "publish")
+        self.assertEqual(self.last_code, 0, out)
+
+    def test_changed_judges_hunks_and_keeps_status_codes(self):
+        base = "def a():\n    return 1\n\n\ndef b():\n    return 2\n"
+        git(self.repo, "checkout", "-q", "main")
+        self.commit(self.repo, "Base\n\nB.", {"mod.py": base})
+        git(self.repo, "checkout", "-q", "feat/retry")
+        git(self.repo, "merge", "-q", "--ff-only", "main")
+        self.run_session(self.repo, "start")
+        self.commit(self.repo, "Change b\n\nB.", {"mod.py": base.replace("return 2", "return 3")})
+        self.write_records(self.fdir, systems=[])
+        self.write(self.fdir / "systems" / "a.md", "---\nid: a\ntitle: A\nchange: new\nanchors:\n  - {path: mod.py, symbol: a}\n"
+                                                   "critical_paths: []\n---\n\n## Purpose\nP.\n")
+        self.write(self.repo / "app.py", "changed = True\n")
+        out = self.run_session(self.repo, "changed")
+        self.assertIn("mod.py  NOT EXPLAINED at line 6", out)  # a's anchor sits next to it, but doesn't explain it
+        self.assertIn("   M app.py", out)  # the first status entry keeps its leading space
 
     def test_launcher_under_home_is_written_with_a_tilde(self):
         import os
