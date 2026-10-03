@@ -16,10 +16,10 @@ class InstallTests(IsolatedTestCase):
         self.assertIn("claude: detected", report)
         self.assertIn("codex: detected", report)
         claude_md = (self.home / ".claude" / "CLAUDE.md").read_text()
-        self.assertTrue(claude_md.startswith("# My rules\n\nBe nice.\n\n<!-- debrief:begin v1 -->"))
+        self.assertTrue(claude_md.startswith(f"# My rules\n\nBe nice.\n\n<!-- debrief:begin v{install.BUNDLE_VERSION} -->"))
         self.assertIn("~/.agents/skills/ai-session/SKILL.md", claude_md)
         self.assertNotIn("<skills>", claude_md)
-        self.assertIn("<!-- debrief:begin v1 -->", (self.home / ".codex" / "AGENTS.md").read_text())
+        self.assertIn(f"<!-- debrief:begin v{install.BUNDLE_VERSION} -->", (self.home / ".codex" / "AGENTS.md").read_text())
         skill = self.home / ".agents" / "skills" / "ai-session" / "SKILL.md"
         self.assertTrue(skill.exists())
         self.assertTrue((self.home / ".agents" / "skills" / "ai-session" / "templates" / "system.md").exists())
@@ -28,6 +28,10 @@ class InstallTests(IsolatedTestCase):
         self.assertTrue((link / "SKILL.md").exists())
         launcher = self.tmp / "bin" / "debrief-session"
         self.assertTrue(os.access(launcher, os.X_OK))
+        # The instructions name the launcher where install put it, not a fixed ~/.local/bin.
+        self.assertIn(f"`bin/session` below means `{launcher}`", claude_md)
+        self.assertIn(f"`bin/session` means `{launcher}`", skill.read_text())
+        self.assertNotIn("<session>", skill.read_text())
         self.assertIn("session ", launcher.read_text())
         self.assertTrue((self.tmp / "tool" / "debrief.pyz").exists())
 
@@ -39,12 +43,12 @@ class InstallTests(IsolatedTestCase):
         report = "\n".join(install.run_install())
         self.assertIn("codex: unchanged", report)
         self.assertEqual(target.read_text(), first)
-        old = first.replace("<!-- debrief:begin v1 -->", "<!-- debrief:begin v0 -->").replace("Rules", "Old rules")
+        old = first.replace(f"<!-- debrief:begin v{install.BUNDLE_VERSION} -->", "<!-- debrief:begin v0 -->").replace("Rules", "Old rules")
         target.write_text("Before\n\n" + old + "\nAfter\n")
         report = "\n".join(install.run_install())
         self.assertIn("codex: updated", report)
         text = target.read_text()
-        self.assertTrue(text.startswith("Before\n\n<!-- debrief:begin v1 -->"))
+        self.assertTrue(text.startswith(f"Before\n\n<!-- debrief:begin v{install.BUNDLE_VERSION} -->"))
         self.assertTrue(text.endswith("\nAfter\n"))
         self.assertNotIn("Old rules", text)
         self.assertEqual(text.count("debrief:begin"), 1)
@@ -83,6 +87,10 @@ class InstallTests(IsolatedTestCase):
         self.assertEqual(len(commands), 2)
         self.assertIn("echo mine", commands)
         self.assertTrue(any(c.endswith("debrief-session context") for c in commands))
+        allow = data["permissions"]["allow"]
+        for form in (str(self.tmp / "bin" / "debrief-session"), "debrief-session"):
+            self.assertIn(f"Bash({form} now:*)", allow)
+        self.assertFalse(any(" run" in rule for rule in allow), "never allowlist run: it executes its argument")
         self.assertIn(str(self.archive), data["permissions"]["additionalDirectories"])
         self.assertIn("Bash(ls:*)", data["permissions"]["allow"])
         self.assertEqual(data["theme"], "dark")

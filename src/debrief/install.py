@@ -100,9 +100,18 @@ def detect() -> Dict[str, str]:
 # --- the always-on block --------------------------------------------------------
 
 
+def session_launcher_text() -> str:
+    """The launcher path as agents should type it (``~/...`` when under home)."""
+    return _tilde(paths.user_bin_dir() / "debrief-session")
+
+
+def render_text(text: str, skills: Optional[Path] = None) -> str:
+    """Fill the bundle's placeholders with this host's paths."""
+    return text.replace("<skills>", _tilde(skills or shared_skills_dir())).replace("<session>", session_launcher_text())
+
+
 def render_block(skills: Optional[Path] = None) -> str:
-    skills_text = _tilde(skills or shared_skills_dir())
-    body = resources.read_text("bundle/block.md").replace("<skills>", skills_text).rstrip("\n")
+    body = render_text(resources.read_text("bundle/block.md"), skills).rstrip("\n")
     return f"<!-- debrief:begin v{BUNDLE_VERSION} -->\n{body}\n{END_MARK}\n"
 
 
@@ -190,6 +199,8 @@ def install_skill(skill: str, dest_root: Path, dry_run: bool = False) -> str:
     changed = False
     for rel in files:
         data = resources.read_bytes(f"bundle/skills/{skill}/{rel}")
+        if rel.endswith(".md"):
+            data = render_text(data.decode("utf-8"), dest_root).encode("utf-8")
         target = dest / rel
         if not target.exists() or target.read_bytes() != data:
             changed = True
@@ -301,9 +312,11 @@ def claude_settings(dry_run: bool = False, remove: bool = False) -> List[str]:
     allow = [r for r in perms.get("allow", []) if "debrief-session" not in r]
     if not remove:
         dirs.append(archive_dir)
+        # Rules match the command as typed: the absolute path, the ~ form the instructions use, or the bare name.
+        forms = list(dict.fromkeys([session_cmd, session_launcher_text(), "debrief-session"]))
         for sub in ("start", "context", "now", "changed", "close", "publish"):
-            allow.append(f"Bash({session_cmd} {sub}:*)")
-            allow.append(f"Bash(debrief-session {sub}:*)")
+            for form in forms:
+                allow.append(f"Bash({form} {sub}:*)")
     for key, value in (("additionalDirectories", dirs), ("allow", allow)):
         if value:
             perms[key] = value

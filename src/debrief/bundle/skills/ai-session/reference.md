@@ -57,7 +57,7 @@ Append-only. Each entry is a heading, then one to five lines:
 The worker pool already caps concurrency at 4, so the queue needs no lock of its own.
 ```
 
-Time is UTC to the minute, from the first line of `bin/session now`. Kinds:
+Time is UTC to the minute, from `bin/session now` (the only line it prints on stdout). Kinds:
 `plan`, `decision`, `finding`, `change`, `test`, `blocker`, `handoff`. A session
 opens with `plan` and ends with `handoff`. A handoff says what is done, what is
 unverified and what is next.
@@ -72,7 +72,7 @@ feature_id: feat--retry-queue          # the feature dir name
 title: Retry failed webhook deliveries
 epic: webhook-reliability              # optional; only when the user names one
 status: in_progress                    # in_progress | ready_for_review | merged | abandoned
-sessions: [20261002T193000Z-4f2a]      # every session that worked on the feature
+sessions: [20261002T193000Z-4f2a]      # optional: Debrief lists the feature's sessions itself
 review_first:                          # at most three
   - {target: retry-queue/drain-loop, why: "Only unbounded loop in the feature"}
 incidental: [src/util/strings.py, vendor/**]   # changed, not worth a system; globs allowed
@@ -140,8 +140,9 @@ gaps:
 ```
 
 - One entry per test group that proves a behavior, not one per test function.
-- `command` is what you ran with `bin/session run`; Debrief matches it against the
-  run ledger, so use the same text.
+- `command` is what you ran with `bin/session run`. Debrief matches it word for
+  word against the run ledger (shell quoting and `-v`/`-q` style flags aside), so a
+  run of `pytest tests/a.py` doesn't verify a claim about `pytest`.
 - `claimed_result: pass` only if a recorded run in this session passed.
 - `gaps` is required. Write `gaps: []` only when you know of none.
 
@@ -171,9 +172,9 @@ Debrief maps commits to legs from its own logs; never add trailers or ids.
 | Command | Does |
 | --- | --- |
 | `bin/session start [--task "..."]` | Opens a session (and a leg if none is open). Prints paths and requests. |
-| `bin/session now` | Prints the journal time, logs new commits, relays requests. |
+| `bin/session now` | Prints the journal time on stdout; logs new commits and relays requests on stderr. |
 | `bin/session run <command>` | Runs a command and records it in the run ledger. |
-| `bin/session changed` | Lists changed files and what explains each one. |
-| `bin/session close [complete\|blocked\|abandoned]` | Ends the session. |
-| `bin/session publish` | Closes out the leg: evidence, archive commit and sync. Only at closeout. |
+| `bin/session changed` | Refreshes the evidence and lists what explains each changed file and hunk. |
+| `bin/session close [complete\|blocked\|abandoned]` | Ends the session (publish does it at closeout). |
+| `bin/session publish` | Closes the session and the leg: evidence, archive commit and sync. Only at closeout. |
 | `debrief check` | Validates the records (if Debrief is on your PATH). |

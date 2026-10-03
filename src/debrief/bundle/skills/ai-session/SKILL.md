@@ -9,7 +9,7 @@ A developer reviews your work in Debrief, a viewer that reads the records you
 write and checks them against git. Records live in an archive outside the
 repository. Write them only where `bin/session start` tells you, never in the repo.
 
-`bin/session` means `~/.local/bin/debrief-session`.
+`bin/session` means `<session>`.
 
 ## 1. Start
 
@@ -31,8 +31,8 @@ bin/session start --task "One-line restatement of the assignment"
 ## 2. Keep the journal
 
 The journal is append-only. Add an entry whenever something worth knowing
-happens, using your file-editing tool. Get the time from `bin/session now`
-(first line of its output):
+happens, using your file-editing tool. Get the time from `bin/session now`: the
+time is the only line it prints on stdout, so `TS=$(bin/session now)` works.
 
 ```markdown
 ### 2026-10-02T19:41Z · decision
@@ -53,8 +53,8 @@ because upstream redelivers.
 One to five lines per entry. Facts, not narration: "Retry loop now stops at the
 deadline; previously it could spin forever" beats "Worked on the retry logic".
 
-Read every line `bin/session now` prints after the time stamp: it relays the
-developer's requests.
+`bin/session now` prints the developer's requests and the commits it logged on
+stderr. Read all of it every time, and never cut its output short (no `| head`).
 
 ## 3. Run tests and builds through the ledger
 
@@ -63,9 +63,11 @@ bin/session run pytest tests/queue -q
 bin/session run "make build && make test"
 ```
 
-The ledger records the command, exit code, duration and output tail. Only a run
-recorded this way counts as evidence that a test passes. Never report a test as
-passing unless you ran it in this session.
+The ledger records the command, exit code, duration, output tail and the
+uncommitted files it tested. Only a run recorded this way counts as evidence that
+a test passes, and only for the same command: `tests.yaml` must name it word for
+word (quoting aside; `-v` and `-q` style flags don't matter). Never report a test
+as passing unless you ran it in this session.
 
 ## 4. Commit atomically
 

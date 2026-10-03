@@ -2,7 +2,7 @@
 
 A human reviews your work through records you write, not by reading every diff.
 The records are checked against the actual diff, so keep them accurate.
-`bin/session` below means `~/.local/bin/debrief-session`.
+`bin/session` below means `<session>`.
 
 **When:** any task that changes behavior or touches more than two files.
 Skip questions, read-only investigation and trivial edits.
@@ -15,8 +15,9 @@ If it reports an existing brief, read the brief and the latest journal first.
 
 **During:** after each decision, finding, test run or blocker, append to your
 session's `journal.md` with your file-editing tool: a `### <time> · <kind>` heading
-(time from `bin/session now`), then 1-5 lines. `bin/session now` also prints
-pending developer requests (close the leg, read new feedback); follow them.
+(time from `bin/session now`, the only line it prints on stdout), then 1-5 lines.
+`bin/session now` also prints pending developer requests on stderr (close the leg,
+read new feedback); read all of its output and follow them.
 Kinds: plan, decision, finding, change, test, blocker, handoff.
 Run builds and tests as `bin/session run <command>` so results are recorded.
 Commit each logical change as you finish it. The message is what a reviewer reads
@@ -27,7 +28,8 @@ behavior changed and why. Never mention these records in commits or the repo.
 next), then run `bin/session close` (`close blocked` if you are stuck). If more work
 arrives later in the conversation, run `bin/session start` again before editing.
 Close out the leg only when the developer asks, in chat or through a request from
-`bin/session`: then follow `<skills>/ai-session-closeout/SKILL.md` and complete every step.
+`bin/session`: then follow `<skills>/ai-session-closeout/SKILL.md` and complete every
+step; it opens its own session.
 
 **Rules**
 - Describe what the code does, not what you meant it to do. Record any gap under Divergences.
