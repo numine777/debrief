@@ -136,7 +136,7 @@
       "kind": "external-io",
       "severity": "medium",
       "on": "added",
-      "pattern": "\\b(?:requests\\.(?:get|post|put|patch|delete|request|Session)|urllib\\.request|urlopen|http\\.client|HTTPConnection|fetch\\(|axios\\.|XMLHttpRequest|subprocess\\.(?:run|Popen|call|check_output|check_call)|os\\.system|os\\.popen|exec\\.Command|socket\\.socket|grpc\\.\\w+channel|net\\.Dial|reqwest::|Command::new)",
+      "pattern": "\\b(?:requests\\.(?:get|post|put|patch|delete|request|Session)|urllib\\.request\\.urlopen|urlopen|http\\.client|HTTPConnection|fetch\\(|axios\\.|XMLHttpRequest|subprocess\\.(?:run|Popen|call|check_output|check_call)|os\\.system|os\\.popen|exec\\.Command|socket\\.socket|grpc\\.\\w+channel|net\\.Dial|reqwest::|Command::new)",
       "message": "External call (network or subprocess). Declare it as a critical path: timeouts and failure handling.",
       "exclude": [
         "**/*.md",
