@@ -114,6 +114,45 @@ class HubTests(IsolatedTestCase):
             call(self.app, "POST", "/api/v1/login", {"token": "dbh_bad"})
         self.assertEqual(call(self.app, "POST", "/api/v1/login", {"token": self.alice})[0].status, 429)
 
+    def test_comment_permissions(self):
+        self.hub.grant("bob", self.pid, "reviewer")
+        alice, bob = self.login(self.alice), self.login(self.bob)
+        anchor = {"scope": "feature", "path": "app.py", "side": "new", "line": 4, "text": "x3 = 6"}
+        shared = call(self.app, "POST", f"{self.base}/comments", {"anchor": anchor, "body": "Why?", "visibility": "shared"},
+                      cookie=alice)[1]["comment"]["id"]
+        private = call(self.app, "POST", f"{self.base}/comments", {"anchor": anchor, "body": "Mine", "visibility": "private"},
+                       cookie=alice)[1]["comment"]["id"]
+        url = f"{self.base}/comments/"
+        # Only the author unshares, edits or deletes a shared comment.
+        self.assertEqual(call(self.app, "PATCH", url + shared, {"visibility": "private"}, cookie=bob)[0].status, 403)
+        self.assertEqual(call(self.app, "PATCH", url + shared, {"body": "x"}, cookie=bob)[0].status, 403)
+        self.assertEqual(call(self.app, "DELETE", url + shared, cookie=bob)[0].status, 403)
+        # Reviewers reply to and resolve shared comments, and the record says who did.
+        resp, data = call(self.app, "PATCH", url + shared, {"state": "resolved", "reply": "Fixed."}, cookie=bob)
+        self.assertEqual(resp.status, 200, data)
+        self.assertEqual((data["comment"]["resolved_by"], data["comment"]["replies"][0]["author"]), ("bob", "bob"))
+        # Someone else's private comment doesn't exist for them, whatever they try.
+        for method, payload in (("PATCH", {"visibility": "shared"}), ("PATCH", {"state": "resolved"}),
+                                ("PATCH", {"reply": "hi"}), ("DELETE", None)):
+            self.assertEqual(call(self.app, method, url + private, payload, cookie=bob)[0].status, 404, (method, payload))
+        self.assertEqual(call(self.app, "PATCH", url + private, {"visibility": "shared"}, cookie=alice)[0].status, 200)
+
+    def test_malformed_review_requests_are_bad_requests(self):
+        alice = self.login(self.alice)
+        bad = [
+            ("POST", "/comments", {"anchor": "app.py:4", "body": "x"}),
+            ("POST", "/comments", {"anchor": {"path": "app.py", "side": "new", "line": 1e309}, "body": "x"}),
+            ("POST", "/comments", {"anchor": {"path": "app.py", "side": "new", "line": True}, "body": "x"}),
+            ("POST", "/comments", {"anchor": {"path": "app.py", "side": "new", "line": 10 ** 30}, "body": "x"}),
+            ("POST", "/comments", {"anchor": {"path": ["a"], "side": "new", "line": 3}, "body": "x"}),
+            ("POST", "/comments", {"anchor": {"path": "app.py", "side": "new", "line": 3}, "body": {"x": 1}}),
+            ("POST", "/prompt", {"ids": [[1]]}),
+            ("POST", "/prompt", {"ids": 5}),
+        ]
+        for method, suffix, payload in bad:
+            resp, data = call(self.app, method, self.base + suffix, payload, cookie=alice)
+            self.assertEqual(resp.status, 400, (suffix, payload, data))
+
     def test_exports_and_cross_references_stay_inside_readable_projects(self):
         # Another project on the hub shares this feature's commit and epic; alice can't read it.
         clone = paths.feature_dir(self.pid, "feat--hubbed", self.hub.archive_root)

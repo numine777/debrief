@@ -174,6 +174,8 @@ class ReviewApp(App):
         evidence = util.read_json(feature_dir / "evidence" / "evidence.json", {}) or {}
         found = comments.locate(comments.load_all(pid, fid, self.api.root, user), feature_dir, evidence)
         ids = body.get("ids")
+        if ids is not None and (not isinstance(ids, list) or not all(isinstance(i, str) for i in ids)):
+            raise BadRequest("ids must be a list of comment ids")
         if ids:
             chosen = [c for c in found if c["id"] in set(ids)]
         else:

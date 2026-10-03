@@ -24,6 +24,7 @@ from . import diffparse, paths, util
 STATES = ("open", "sent", "resolved")
 VISIBILITY = ("private", "shared")
 MAX_BODY_CHARS = 20000
+MAX_LINE = 10_000_000
 
 
 class CommentError(ValueError):
@@ -64,18 +65,43 @@ def load_all(project_id: str, feature_id: str, root: Optional[Path] = None, user
     return sorted(shared + private, key=lambda c: c.get("created_at") or "")
 
 
-def _find(project_id: str, feature_id: str, root: Optional[Path], comment_id: str) -> Tuple[Path, List[dict], dict]:
+def _find(project_id: str, feature_id: str, root: Optional[Path], comment_id: str,
+          user: str) -> Tuple[Path, List[dict], dict]:
+    """A shared comment, or one of ``user``'s private ones. Others' private comments don't exist for them."""
     for path in (shared_path(project_id, feature_id, root), private_path(project_id, feature_id, root)):
         items = _read(path)
+        shared = path == shared_path(project_id, feature_id, root)
         for item in items:
-            if item.get("id") == comment_id:
+            if item.get("id") == comment_id and (shared or item.get("author") in (None, user)):
                 return path, items, item
     raise KeyError(comment_id)
 
 
+def _line_number(value) -> int:
+    if isinstance(value, bool):
+        raise CommentError("anchor.line must be a line number")
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, str) and value.strip().isdigit():
+        value = int(value.strip())
+    if not isinstance(value, int) or not 1 <= value <= MAX_LINE:
+        raise CommentError("anchor.line must be a line number")
+    return value
+
+
+def _text(value, what: str) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise CommentError(f"{what} must be text")
+    return value
+
+
 def create(project_id: str, feature_id: str, data: dict, author: str, root: Optional[Path] = None) -> dict:
     anchor = data.get("anchor") or {}
-    body = str(data.get("body") or "").strip()
+    if not isinstance(anchor, dict):
+        raise CommentError("anchor must be an object with path, side and line")
+    body = _text(data.get("body"), "body").strip()
     if not body:
         raise CommentError("a comment needs some text")
     if len(body) > MAX_BODY_CHARS:
@@ -83,11 +109,8 @@ def create(project_id: str, feature_id: str, data: dict, author: str, root: Opti
     side = anchor.get("side")
     if side not in ("new", "old"):
         raise CommentError("anchor.side must be new or old")
-    try:
-        line = int(anchor.get("line"))
-    except (TypeError, ValueError):
-        raise CommentError("anchor.line must be a line number") from None
-    if not anchor.get("path"):
+    line = _line_number(anchor.get("line"))
+    if not anchor.get("path") or not isinstance(anchor.get("path"), str):
         raise CommentError("anchor.path is required")
     visibility = data.get("visibility") or "private"
     if visibility not in VISIBILITY:
@@ -123,37 +146,52 @@ def create(project_id: str, feature_id: str, data: dict, author: str, root: Opti
 
 def update(project_id: str, feature_id: str, comment_id: str, data: dict, user: str,
            root: Optional[Path] = None) -> Tuple[dict, bool]:
-    """Edit body, state or visibility. Returns (comment, shared_changed)."""
+    """Edit body, state or visibility, or add a reply. Returns (comment, shared_changed).
+
+    Only the author edits the text or changes visibility: unsharing someone
+    else's comment would hide it from the team and the agent. On a shared
+    comment, anyone who may write review records can reply and change its
+    state, as in a pull request conversation; who did it is recorded.
+    """
     with _lock(project_id, feature_id, root):
         try:
-            path, items, item = _find(project_id, feature_id, root, comment_id)
+            path, items, item = _find(project_id, feature_id, root, comment_id, user)
         except KeyError:
             raise CommentError("no such comment") from None
         shared_before = path == shared_path(project_id, feature_id, root)
+        is_author = item.get("author") in (None, user)
+        target_visibility = data.get("visibility")
+        if target_visibility is not None and target_visibility not in VISIBILITY:
+            raise CommentError("visibility must be private or shared")
+        moving = target_visibility is not None and (target_visibility == "shared") != shared_before
+        if moving and not is_author:
+            raise PermissionError("only the author can share or unshare a comment")
+        if "body" in data and not is_author:
+            raise PermissionError("only the author can edit a comment")
         now = util.now_iso()
         if "body" in data:
-            body = str(data["body"] or "").strip()
+            body = _text(data["body"], "body").strip()
             if not body:
                 raise CommentError("a comment needs some text")
-            if item.get("author") not in (None, user):
-                raise PermissionError("only the author can edit a comment")
             item["body"] = body[:MAX_BODY_CHARS]
         if "state" in data:
             state = data["state"]
             if state not in STATES:
                 raise CommentError("state must be open, sent or resolved")
-            item["state"] = state
+            if state != item.get("state"):
+                item["state"] = state
+                item["state_changed_by"] = user
             item["resolved_at"] = now if state == "resolved" else None
+            item["resolved_by"] = user if state == "resolved" else None
             if state == "sent" and not item.get("sent_at"):
                 item["sent_at"] = now
         if "reply" in data:
-            text = str(data["reply"] or "").strip()
+            text = _text(data["reply"], "reply").strip()
             if text:
                 item.setdefault("replies", []).append({"id": "r-" + secrets.token_hex(4), "author": user,
                                                       "body": text[:MAX_BODY_CHARS], "created_at": now})
         item["updated_at"] = now
-        target_visibility = data.get("visibility")
-        if target_visibility in VISIBILITY and (target_visibility == "shared") != shared_before:
+        if moving:
             items = [c for c in items if c.get("id") != comment_id]
             _write(path, items)
             other = shared_path(project_id, feature_id, root) if target_visibility == "shared" else private_path(
@@ -170,7 +208,7 @@ def delete(project_id: str, feature_id: str, comment_id: str, user: str, root: O
     """Delete a comment. Returns whether it was shared."""
     with _lock(project_id, feature_id, root):
         try:
-            path, items, item = _find(project_id, feature_id, root, comment_id)
+            path, items, item = _find(project_id, feature_id, root, comment_id, user)
         except KeyError:
             raise CommentError("no such comment") from None
         if item.get("author") not in (None, user):
