@@ -58,11 +58,16 @@ On a remote Linux host, forward the port: `ssh -L 7319:127.0.0.1:7319 host`.
 5. **The viewer.** Brief, system map, systems, tests, review queue, a diff in
    Story mode (commits in order, led by their messages) or Systems mode (hunks
    under each system's Change section), timeline, commit pages by SHA, search.
+   It also fits a phone or tablet, for example through the hub: the view tabs
+   stay at the top of the screen, tables become cards, the map becomes a
+   layered list and code wraps under its own indentation.
 6. **The review loop.** Click a line number to comment. Comments are private
    unless you share them; turn open ones into a copy-ready prompt for the agent,
    or queue them as `feedback.md`, which `bin/session now` relays. Mark hunks
    reviewed; marks clear when the agent changes that code. Press **Close leg**
-   to ask the agent to close out.
+   to ask the agent to close out. On a keyboard, `j`/`k` move between hunks, `c`
+   comments and `m` marks (`?` lists the rest); on a touch screen a bar at the
+   bottom does the same: tap a code line to pick it, then **Comment**.
 
 ## Commands
 
