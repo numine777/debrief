@@ -340,6 +340,23 @@ class PhoneLayoutTests(IsolatedTestCase):
             self.assertEqual(wide.locator(".review-first:visible").count(), 1)
             self.assertEqual(page.errors + wide.errors, [])
 
+    def test_jump_menu_stands_in_for_the_outline(self):
+        with sync_playwright() as p:
+            page = self.open(p, self.feature + "/diff?mode=story", ".card.commit", viewport={"width": 390, "height": 420})
+            self.assertFalse(page.locator(".outline").is_visible())
+            jump = page.locator("select.jump")
+            self.assertEqual(jump.locator("option").all_inner_texts(), ["Jump to a commit", "1. Change main", "2. Drop y from util"])
+            jump.select_option(index=2)
+            page.wait_for_timeout(200)
+            card = page.locator(".card.commit", has_text="Drop y from util")
+            self.assertLess(abs(card.bounding_box()["y"] - 72), 40)  # under the sticky tabs, where scroll-margin puts it
+            self.assertEqual(jump.input_value(), "")  # ready for the next jump
+            wide = self.open(p, self.feature + "/diff?mode=story", ".card.commit", viewport={"width": 1280, "height": 800},
+                             is_mobile=False, has_touch=False)
+            self.assertTrue(wide.locator(".outline").is_visible())
+            self.assertFalse(wide.locator("select.jump").is_visible())
+            self.assertEqual(page.errors + wide.errors, [])
+
     def test_search_and_help_suit_the_screen(self):
         with sync_playwright() as p:
             page = self.open(p, self.feature, ".feature-head")

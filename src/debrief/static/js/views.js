@@ -785,13 +785,22 @@
       h("div", { class: "segmented", role: "group", "aria-label": "Diff mode" },
         h("button", { type: "button", "aria-pressed": String(mode === "story"), onclick: () => setMode("story") }, "Story"),
         h("button", { type: "button", "aria-pressed": String(mode === "systems"), onclick: () => setMode("systems") }, "Systems")),
-      h("span", { class: "small muted" }, mode === "story" ? "Commits in order, each led by its message." : "The same changes grouped under each system's Change section."));
+      h("span", { class: "small muted mode-blurb" }, mode === "story" ? "Commits in order, each led by its message." : "The same changes grouped under each system's Change section."));
     const completeness = h("span", { class: "completeness" },
       cov.unclaimed ? [glyph("unclaimed"), `${plural(cov.unclaimed, "hunk")} unexplained`] : cov.units ? [glyph("covered"), "Every hunk is explained"] : "No changes yet",
       cov.weak ? h("span", { class: "muted" }, ` · ${cov.weak} weak`) : null);
     toolbar.appendChild(completeness);
+    // Where there is no room for the outline column, a native menu jumps to the same places.
+    const jump = h("select", { class: "jump narrow-only", "aria-label": mode === "story" ? "Jump to a commit" : "Jump to a group of changes",
+      onchange: (evt) => {
+        const target = document.getElementById(evt.currentTarget.value);
+        evt.currentTarget.value = "";
+        if (target) target.scrollIntoView({ block: "start" });
+      } }, h("option", { value: "" }, mode === "story" ? "Jump to a commit" : "Jump to a system"));
+    toolbar.appendChild(jump);
     root.appendChild(toolbar);
     const outline = h("nav", { class: "outline", "aria-label": "Outline" });
+    outline.jump = (id, label) => jump.appendChild(h("option", { value: id }, label));
     const stream = h("div", { class: "stream" });
     root.appendChild(h("div", { class: "diff-layout" }, outline, stream));
     if (mode === "story") await storyMode(feature, route, outline, stream, toolbar);
@@ -830,6 +839,7 @@
       const id = "commit-" + c.sha;
       ol.appendChild(h("li", null, h("a", { href: `#${id}`, onclick: (evt) => { evt.preventDefault(); document.getElementById(id).scrollIntoView({ block: "start" }); } },
         h("span", { class: "seq" }, String(seq)), h("span", { class: "label" }, c.subject || short(c.sha)))));
+      outline.jump(id, `${seq}. ${c.subject || short(c.sha)}`);
       const sess = c.session_id ? sessions[c.session_id] : null;
       const systems = c.systems || [];
       const tests = Array.from(new Set(feature.tests.tests.filter((t) => t.validates.some((v) => systems.includes(v.split("/")[0]))).map((t) => t.id)));
@@ -889,9 +899,12 @@
     }
     const ul = h("ul");
     outline.appendChild(ul);
-    const addOutline = (id, label, count, state) => ul.appendChild(h("li", null, h("a", { href: "#" + id,
-      onclick: (evt) => { evt.preventDefault(); document.getElementById(id).scrollIntoView({ block: "start" }); } },
-      glyph(state), h("span", { class: "label" }, label), h("span", { class: "seq" }, String(count)))));
+    const addOutline = (id, label, count, state) => {
+      ul.appendChild(h("li", null, h("a", { href: "#" + id,
+        onclick: (evt) => { evt.preventDefault(); document.getElementById(id).scrollIntoView({ block: "start" }); } },
+        glyph(state), h("span", { class: "label" }, label), h("span", { class: "seq" }, String(count)))));
+      outline.jump(id, `${label} (${count})`);
+    };
     const renderGroup = (id, cls, head, items) => {
       const group = h("section", { class: ["system-group", cls], id });
       group.appendChild(head);
