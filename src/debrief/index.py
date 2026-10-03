@@ -73,7 +73,7 @@ def update_feature(project_id: str, feature_id: str, root: Optional[Path] = None
         feature_dir = paths.feature_dir(project_id, feature_id, root)
         feature = records.load_feature(feature_dir)
         evidence = evidence if evidence is not None else _evidence(project_id, feature_id, root)
-        _write_feature(conn, project_id, feature_id, feature, evidence)
+        _write_feature_safely(conn, project_id, feature_id, feature, evidence)
         conn.commit()
     finally:
         if own:
@@ -98,19 +98,19 @@ def _write_feature(conn: sqlite3.Connection, project_id: str, feature_id: str, f
     open_leg = open_legs[-1] if open_legs else None
     conn.execute(
         "INSERT INTO features VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (project_id, feature_id, brief.get("title") or feature_id, brief.get("status") or "in_progress",
-         brief.get("epic"), branch, updated, cov.get("ratio"), cov.get("units"), cov.get("covered"),
-         cov.get("incidental"), cov.get("weak"), cov.get("unclaimed"), len(legs), len(open_legs),
-         open_leg["leg_id"] if open_leg else None, open_commits,
-         open_leg.get("close_requested_at") if open_leg else None, len(queue),
-         sum(1 for i in queue if i["severity"] == "high"), len(feature["sessions"]), evidence.get("head"),
-         evidence.get("effective_base") or evidence.get("base"), landed_sha, intent[:400]),
+        _row(project_id, feature_id, brief.get("title") or feature_id, brief.get("status") or "in_progress",
+             brief.get("epic"), branch, updated, cov.get("ratio"), cov.get("units"), cov.get("covered"),
+             cov.get("incidental"), cov.get("weak"), cov.get("unclaimed"), len(legs), len(open_legs),
+             open_leg["leg_id"] if open_leg else None, open_commits,
+             open_leg.get("close_requested_at") if open_leg else None, len(queue),
+             sum(1 for i in queue if i.get("severity") == "high"), len(feature["sessions"]), evidence.get("head"),
+             evidence.get("effective_base") or evidence.get("base"), landed_sha, intent[:400]),
     )
     conn.execute("DELETE FROM commits WHERE project_id=? AND feature_id=?", (project_id, feature_id))
     for commit in evidence.get("commits") or []:
         conn.execute("INSERT OR REPLACE INTO commits VALUES (?,?,?,?,?,?,?)",
-                     (commit["sha"], project_id, feature_id, commit.get("leg_id"), commit.get("kind"),
-                      commit.get("subject"), commit.get("committed_at")))
+                     _row(commit["sha"], project_id, feature_id, commit.get("leg_id"), commit.get("kind"),
+                          commit.get("subject"), commit.get("committed_at")))
     conn.execute("DELETE FROM search WHERE project_id=? AND feature_id=?", (project_id, feature_id))
     rows = []
     if feature.get("brief"):
@@ -136,7 +136,29 @@ def _write_feature(conn: sqlite3.Connection, project_id: str, feature_id: str, f
     for commit in evidence.get("commits") or []:
         rows.append(("commit", commit["sha"], commit.get("subject") or "", commit.get("body") or ""))
     conn.executemany("INSERT INTO search VALUES (?,?,?,?,?,?)",
-                     [(project_id, feature_id, kind, ref, title, body) for kind, ref, title, body in rows])
+                     [_row(project_id, feature_id, kind, ref, title, body) for kind, ref, title, body in rows])
+
+
+def _row(*values) -> tuple:
+    """SQLite binds only scalars; anything else in a record becomes its JSON text."""
+    return tuple(v if v is None or isinstance(v, (str, int, float)) else json.dumps(v, default=str) for v in values)
+
+
+def _write_feature_safely(conn: sqlite3.Connection, project_id: str, feature_id: str, feature: dict,
+                          evidence: dict) -> None:
+    """Index one feature; if its records or evidence can't be indexed, list it by id and say why."""
+    conn.execute("SAVEPOINT feature")
+    try:
+        _write_feature(conn, project_id, feature_id, feature, evidence)
+    except Exception as exc:  # one bad feature must not break the index for every project
+        conn.execute("ROLLBACK TO feature")
+        sys.stderr.write(f"debrief: indexed {project_id}/{feature_id} without details: {type(exc).__name__}: {exc}\n")
+        for table in ("features", "commits", "search"):
+            conn.execute(f"DELETE FROM {table} WHERE project_id=? AND feature_id=?", (project_id, feature_id))
+        conn.execute("INSERT INTO features (project_id, feature_id, title, status, summary) VALUES (?,?,?,?,?)",
+                     (project_id, feature_id, feature_id, "in_progress",
+                      "Debrief could not index this feature's records; run `debrief check` on it."))
+    conn.execute("RELEASE feature")
 
 
 def set_landed(project_id: str, feature_id: str, sha: str, method: str, confidence: float, detail: str,
@@ -167,7 +189,7 @@ def rebuild(root: Optional[Path] = None) -> int:
             for feature_dir in sorted(p for p in features_dir.iterdir() if p.is_dir()):
                 feature = records.load_feature(feature_dir)
                 evidence = _evidence(pid, feature_dir.name, root)
-                _write_feature(conn, pid, feature_dir.name, feature, evidence)
+                _write_feature_safely(conn, pid, feature_dir.name, feature, evidence)
                 landed = util.read_json(feature_dir / "evidence" / "landed.json", None)
                 if isinstance(landed, dict):
                     for item in landed.get("commits", []):

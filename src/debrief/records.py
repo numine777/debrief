@@ -261,6 +261,23 @@ def _check_id(value: Any, rec: str, what: str, issues: List[dict]) -> None:
         issues.append(issue("warning", rec, f"{what} {value!r} should be a kebab-case slug"))
 
 
+def _text_fields(meta: dict, keys: Tuple[str, ...], rec: str, issues: List[dict]) -> None:
+    """Coerce fields that must be text, so a sloppy record (``title: [a, b]``, ``status: yes``)
+    is reported and read as text instead of breaking the index or the viewer."""
+    for key in keys:
+        value = meta.get(key)
+        if value is None or isinstance(value, str):
+            continue
+        if isinstance(value, list):
+            text = " ".join(str(v) for v in value)
+        elif isinstance(value, bool):
+            text = "true" if value else "false"
+        else:
+            text = str(value)
+        meta[key] = text
+        issues.append(issue("warning", rec, f"`{key}` should be text; read {value!r} as {text!r}"))
+
+
 def _check_enum(meta: dict, key: str, allowed, rec: str, issues: List[dict], required: bool = True) -> None:
     value = meta.get(key)
     if value is None:
@@ -315,6 +332,7 @@ def load_brief(feature_dir: Path) -> Optional[dict]:
     rec = _load_markdown(path, "brief.md")
     meta, issues = rec["meta"], rec["issues"]
     if rec["meta"] or not issues:
+        _text_fields(meta, ("title", "status", "epic", "feature_id"), "brief.md", issues)
         if not meta.get("title"):
             issues.append(issue("warning", "brief.md", "missing `title`"))
         _check_enum(meta, "status", BRIEF_STATUSES, "brief.md", issues)
@@ -340,7 +358,7 @@ def load_brief(feature_dir: Path) -> Optional[dict]:
                     cleaned = cleaned[2:]
                 incidental.append(cleaned)
         meta["incidental"] = incidental
-        if meta.get("epic") is not None and not isinstance(meta.get("epic"), str):
+        if meta.get("epic") is not None and not _ID_RE.match(meta["epic"]):
             issues.append(issue("warning", "brief.md", "`epic` should be a slug"))
         _check_sections(rec["sections"], BRIEF_SECTIONS, "brief.md", issues)
     return rec
@@ -350,6 +368,7 @@ def load_system(path: Path, feature_dir: Path) -> dict:
     rel = str(path.relative_to(feature_dir))
     rec = _load_markdown(path, rel)
     meta, issues = rec["meta"], rec["issues"]
+    _text_fields(meta, ("title", "change"), rel, issues)
     stem = path.stem
     if not meta.get("id"):
         meta["id"] = stem
@@ -385,6 +404,7 @@ def load_system(path: Path, feature_dir: Path) -> dict:
             issues.append(issue("warning", rel, "a critical path has no `id`"))
             continue
         _check_id(cp_id, rel, "critical path id", issues)
+        _text_fields(item, ("kind",), rel, issues)
         kind = item.get("kind")
         if kind not in CRITICAL_KINDS:
             issues.append(issue("warning", rel, f"critical path `{cp_id}` kind {kind!r} is not one of {', '.join(CRITICAL_KINDS)}"))
@@ -437,6 +457,7 @@ def load_tests(feature_dir: Path) -> Optional[dict]:
             issues.append(issue("warning", rel, f"duplicate test id `{tid}`"))
         seen.add(tid)
         _check_id(tid, rel, "test id", issues)
+        _text_fields(item, ("kind", "claimed_result"), rel, issues)
         validates = [str(v) for v in _as_list(item.get("validates"))]
         if not validates:
             issues.append(issue("warning", rel, f"test `{tid}` validates nothing"))
@@ -475,6 +496,7 @@ def load_decision(path: Path, feature_dir: Path) -> dict:
     rel = str(path.relative_to(feature_dir))
     rec = _load_markdown(path, rel)
     meta, issues = rec["meta"], rec["issues"]
+    _text_fields(meta, ("title", "status", "reversibility"), rel, issues)
     stem = path.stem
     meta["id"] = str(meta.get("id") or stem)
     if meta["id"] != stem:

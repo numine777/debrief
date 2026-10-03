@@ -144,6 +144,51 @@ class FeatureTests(IsolatedTestCase):
         self.assertEqual(records.closeout_issues(feature), [])
         self.assertEqual([i for i in records.all_issues(feature) if i["level"] == "error"], [])
 
+    def test_sloppy_field_types_are_read_as_text_and_indexed(self):
+        from debrief import index
+
+        fdir = self.archive / "projects" / "p" / "features" / "feat--sloppy"
+        self.write_records(fdir)
+        brief = (fdir / "brief.md").read_text().replace("title: Test feature", "title: [Fix, the, parser]") \
+            .replace("status: ready_for_review", "status: yes")
+        self.write(fdir / "brief.md", brief.replace("incidental: []\n", "incidental: []\nepic: {a: 1}\n"))
+        self.write(fdir / "tests.yaml", "tests:\n  - {id: t1, validates: [app], claim: c, kind: unit, command: x, "
+                                        "claimed_result: yes}\ngaps: []\n")
+        feature = records.load_feature(fdir)
+        meta = feature["brief"]["meta"]
+        self.assertEqual((meta["title"], meta["status"]), ("Fix the parser", "true"))
+        self.assertIsInstance(meta["epic"], str)
+        self.assertEqual(feature["tests"]["tests"][0]["claimed_result"], "true")
+        joined = "\n".join(i["message"] for i in records.all_issues(feature))
+        self.assertIn("`title` should be text", joined)
+        self.assertIn("claimed_result 'true' is not one of", joined)
+        self.write(self.archive / "projects" / "p" / "project.json", '{"project_id": "p"}')
+        self.assertEqual(index.rebuild(self.archive), 1)
+        self.assertEqual(index.list_features(self.archive)[0]["title"], "Fix the parser")
+
+    def test_one_unindexable_feature_does_not_break_the_index(self):
+        from unittest import mock
+
+        from debrief import index
+
+        for fid in ("feat--good", "feat--bad"):
+            self.write_records(self.archive / "projects" / "p" / "features" / fid)
+        self.write(self.archive / "projects" / "p" / "project.json", '{"project_id": "p"}')
+        real = index._write_feature
+
+        def flaky(conn, pid, fid, feature, evidence):
+            if fid == "feat--bad":
+                conn.execute("INSERT INTO search VALUES ('p', 'feat--bad', 'zqzq', 'zqzq', 'zqzq', 'zqzq')")
+                raise TypeError("unsupported type")
+            return real(conn, pid, fid, feature, evidence)
+
+        with mock.patch.object(index, "_write_feature", flaky), mock.patch("sys.stderr"):
+            self.assertEqual(index.rebuild(self.archive), 2)
+        rows = {r["feature_id"]: r for r in index.list_features(self.archive)}
+        self.assertEqual(rows["feat--good"]["title"], "Test feature")
+        self.assertIn("could not index", rows["feat--bad"]["summary"])
+        self.assertEqual(index.search("zqzq", root=self.archive), [])
+
 
 if __name__ == "__main__":
     unittest.main()
