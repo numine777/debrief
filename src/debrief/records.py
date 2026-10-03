@@ -20,7 +20,7 @@ PROTOCOL = "ai-sessions/0.1"
 
 JOURNAL_KINDS = ("plan", "decision", "finding", "change", "test", "blocker", "handoff")
 BRIEF_STATUSES = ("in_progress", "ready_for_review", "merged", "abandoned")
-SESSION_STATUSES = ("in_progress", "complete", "blocked", "abandoned")
+SESSION_STATUSES = ("in_progress", "complete", "blocked", "abandoned", "superseded")
 SYSTEM_CHANGES = ("new", "modified", "touched")
 CRITICAL_KINDS = ("loop", "retry", "state-machine", "concurrency", "error-handling", "external-io", "migration")
 TEST_KINDS = ("unit", "integration", "e2e", "property", "manual")
@@ -534,10 +534,12 @@ def parse_journal(text: str, rel: str = "journal.md") -> Tuple[List[dict], List[
                 issues.append(issue("warning", rel, f"line {number}: unknown entry kind `{kind}`"))
             current = {"at": stamp, "kind": kind, "line": number}
             lines = []
-        elif line.startswith("### ") and current is None and not entries:
-            issues.append(issue("warning", rel, f"line {number}: heading is not `### <time> · <kind>`"))
-        elif current is not None:
-            lines.append(line)
+        else:
+            if line.startswith("###") and not line.startswith("####"):
+                # Not an entry heading: kept as text, but say so instead of silently merging entries.
+                issues.append(issue("warning", rel, f"line {number}: heading is not `### <time> · <kind>`"))
+            if current is not None:
+                lines.append(line)
     if current is not None:
         current["text"] = "\n".join(lines).strip()
         entries.append(current)

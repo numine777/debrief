@@ -104,6 +104,13 @@ class JournalTests(unittest.TestCase):
         self.assertIn("unknown entry kind `banter`", messages)
         self.assertIn("`yesterday` is not a UTC time", messages)
 
+    def test_malformed_headings_after_the_first_entry_are_reported(self):
+        text = ("### 2026-10-02T19:41Z · plan\nDo it.\n\n### 2026-10-02 19:50Z · test\nran\n\n"
+                "### 2026-10-02T19:55Z · test (pytest)\nran\n\n### …\n")
+        entries, issues = records.parse_journal(text)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual([i["message"].split(":")[0] for i in issues], ["line 4", "line 7", "line 10"])
+
     def test_ascii_separator(self):
         entries, issues = records.parse_journal("### 2026-10-02T19:41Z - decision\nx\n")
         self.assertEqual(entries[0]["kind"], "decision")

@@ -382,11 +382,16 @@ def _latest_session_with_journal(ctx: Context, exclude: Optional[str] = None) ->
     if not base.is_dir():
         return None
     candidates = sorted((p for p in base.iterdir() if p.is_dir() and p.name != exclude), reverse=True)
+    fallback = None
     for path in candidates:
         journal = path / "journal.md"
         if journal.exists():
-            return journal
-    return None
+            # Another host may have just started a session: its journal has no entries yet.
+            entries, _ = records.parse_journal(journal.read_text(encoding="utf-8", errors="replace"))
+            if entries:
+                return journal
+            fallback = fallback or journal
+    return fallback
 
 
 def _pending_requests(ctx: Context, leg: Optional[dict], session: Optional[dict], mark: bool) -> List[str]:
@@ -463,11 +468,14 @@ def cmd_start(ctx: Context, args) -> int:
         leg, leg_created = ensure_open_leg(ctx)
         previous_id = current_session_id(ctx)
         previous = load_session_meta(ctx, previous_id) if previous_id else None
-        if previous and previous.get("status") == "in_progress":
+        superseded = bool(previous and previous.get("status") == "in_progress")
+        if previous and superseded:
             # The previous run in this worktree ended without `close`. Commits made
             # since it last looked were made while it was open, so they are its.
             log_commits(ctx, previous, leg, previous_id)
             previous.setdefault("events", []).append({"at": util.now_iso(), "kind": "superseded"})
+            previous["status"] = "superseded"
+            previous["ended_at"] = previous.get("last_activity_at") or util.now_iso()
             save_session_meta(ctx, previous)
         session_id = new_session_id()
         meta = {
@@ -523,7 +531,7 @@ def cmd_start(ctx: Context, args) -> int:
             out.append("Read it before you continue.")
     elif prior_journal:
         out.append(f"Earlier session journal: {prior_journal} (read it before you continue).")
-    if previous and previous.get("status") == "in_progress":
+    if superseded:
         out.append(f"The previous session here ({previous_id}) ended without `close`; its journal shows where it stopped.")
     if pull_note:
         out.append(f"Note: {pull_note}")

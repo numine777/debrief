@@ -279,6 +279,26 @@ class ProtocolFixTests(SessionFixture):
         out = self.run_session(self.repo, "publish")
         self.assertEqual(self.last_code, 0, out)
 
+    def test_superseded_session_is_closed_out(self):
+        self.run_session(self.repo, "start")
+        first = self.legs()[0]["sessions"][0]["session_id"]
+        self.run_session(self.repo, "start")
+        meta = json.loads((self.fdir / "sessions" / first / "session.json").read_text())
+        self.assertEqual(meta["status"], "superseded")
+        self.assertTrue(meta["ended_at"])
+        self.assertFalse([i for i in records.all_issues(records.load_feature(self.fdir)) if "status" in i["message"]])
+
+    def test_start_points_at_the_latest_journal_with_entries(self):
+        self.run_session(self.repo, "start")
+        self.append_journal(self.fdir, "plan", "Real work.")
+        real = self.journal(self.fdir)
+        self.run_session(self.repo, "close")
+        empty = self.fdir / "sessions" / "29991231T000000Z-ffff"  # another host's session, just started
+        self.write(empty / "journal.md", "# Journal\n")
+        self.write(empty / "session.json", "{}")
+        out = self.run_session(self.repo, "start")
+        self.assertIn(str(real), out)
+
     def test_changed_judges_hunks_and_keeps_status_codes(self):
         base = "def a():\n    return 1\n\n\ndef b():\n    return 2\n"
         git(self.repo, "checkout", "-q", "main")
