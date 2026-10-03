@@ -158,15 +158,6 @@ class ViewerSmokeTests(IsolatedTestCase):
         self.assertEqual(unexpected, [])
         self.assertEqual(requests, [])
 
-    def _unused(self):
-        unexpected = [e for e in errors if "example.com" not in e and "Content Security Policy" not in e]
-        self.assertEqual(unexpected, [])
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 @unittest.skipIf(sync_playwright is None, "Playwright is not installed")
 class HubUiTests(IsolatedTestCase):
     def test_sign_in_then_browse(self):
@@ -200,3 +191,61 @@ class HubUiTests(IsolatedTestCase):
         finally:
             server.shutdown()
             server.server_close()
+
+    def test_readers_see_no_write_controls(self):
+        from debrief import archive, comments, paths
+        from debrief.hub import Hub, HubSyncer, make_hub_server
+
+        repo = self.make_repo(files={"app.py": "".join(f"x{i} = {i}\n" for i in range(10))})
+        git(repo, "checkout", "-q", "-b", "feat/hubui")
+        pid = self.init_project(repo)
+        fdir = self.feature_dir(pid, "feat--hubui")
+        self.run_session(repo, "start")
+        self.commit(repo, "Change x3\n\nBody.", {"app.py": "".join(f"x{i} = {i * 2}\n" for i in range(10))})
+        self.run_session(repo, "now")
+        self.write_records(fdir)
+        ingest.ingest_feature(pid, "feat--hubui")
+        anchor = {"scope": "feature", "path": "app.py", "side": "new", "line": 4, "text": "x3 = 6"}
+        comments.create(pid, "feat--hubui", {"anchor": anchor, "body": "Alice's note", "visibility": "shared"}, "alice")
+        hub = Hub(self.tmp / "hub")
+        hub.init("localhost")
+        archive.set_remote(paths.project_dir(pid), str(hub.add_repo(pid)))
+        archive.sync(paths.project_dir(pid), "Publish to hub")
+        HubSyncer(hub).tick()
+        tokens = {name: hub.add_user(name) for name in ("alice", "bob")}
+        hub.grant("alice", pid, "reviewer")
+        hub.grant("bob", pid, "reader")
+        server = make_hub_server(hub, "127.0.0.1", 0, None, None, insecure_http=True, hostnames=["localhost"])
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        counts = {}
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch()
+                for name in ("bob", "alice"):
+                    page = browser.new_context().new_page()
+                    page.goto(f"http://localhost:{port}/#/p/{pid}/f/feat--hubui")
+                    page.locator("form.login input").fill(tokens[name])
+                    page.locator("form.login button").click()
+                    page.locator("main", has_text="Intent").wait_for()
+                    close_buttons = page.locator("button", has_text="Close leg-01").count()
+                    page.goto(f"http://localhost:{port}/#/p/{pid}/f/feat--hubui/diff?mode=systems")
+                    page.locator(".comment-row", has_text="Alice's note").wait_for()
+                    card = page.locator(".comment-row", has_text="Alice's note")
+                    counts[name] = (close_buttons, page.locator(".ln-btn").count(),
+                                    card.locator("button", has_text="Edit").count(),
+                                    card.locator("button", has_text="Resolve").count(),
+                                    page.locator(".mark-btn").count() > 0)
+                browser.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+        # A reader can mark hunks for themselves but sees nothing that changes shared records.
+        self.assertEqual(counts["bob"], (0, 0, 0, 0, True))
+        close, line_buttons, edit, resolve, marks = counts["alice"]
+        self.assertEqual((close, edit, resolve, marks), (1, 1, 1, True))
+        self.assertGreater(line_buttons, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -93,6 +93,9 @@ a:hover { text-decoration-color: currentColor; }
 button, input, select, textarea { font: inherit; color: inherit; }
 code, pre, .mono { font-family: var(--font-code); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.skip-link { position: absolute; left: 0.5rem; top: -3rem; z-index: 50; padding: 0.4rem 0.7rem; background: var(--sheet); border: 2px solid var(--focus); color: var(--ink); }
+.skip-link:focus { top: 0.5rem; }
+.outdated-note { margin: 0.4rem 0 0; color: var(--ink-2); }
 [hidden] { display: none !important; }
 
 /* --- top bar ------------------------------------------------------------------ */

@@ -7,6 +7,11 @@
   const enc = encodeURIComponent;
 
   const readonly = () => Boolean(D.exported);
+  // Whether this viewer may change review records: not an export, not a read-only server, not a hub reader.
+  const canWrite = (feature) => !D.exported && !(D.meta && D.meta.readonly) && !(feature && feature.role === "reader");
+  const me = (feature) => (feature && feature.review && feature.review.user) || (D.meta && D.meta.user && D.meta.user.name) || null;
+  const isMine = (feature, comment) => !comment.author || comment.author === me(feature);
+  D.canWrite = canWrite;
   const fbase = (feature) => data.featurePath(feature.project.project_id, feature.feature_id);
 
   // --- comments in the diff -------------------------------------------------------------------
@@ -15,6 +20,8 @@
 
   function indexComments(feature, scope) {
     const out = new Map();
+    const byBlob = new Map();
+    const add = (map, key, c) => { if (!map.has(key)) map.set(key, []); map.get(key).push(c); };
     for (const c of feature.comments || []) {
       const a = c.anchor || {};
       let key = null;
@@ -24,11 +31,16 @@
       } else if (a.scope === scope) {
         key = commentKey(a.path, a.side, a.line);
       }
-      if (!key) continue;
-      if (!out.has(key)) out.set(key, []);
-      out.get(key).push(c);
+      if (key) add(out, key, c);
+      // Any diff showing the exact file version a comment was made on can show it too, whichever
+      // mode it was made in: a Systems-mode comment appears on the commit that wrote that version.
+      if (a.blob) add(byBlob, commentKey(a.blob, a.side, a.line), c);
     }
-    return out;
+    return { get(path, blob, side, line) {
+      const found = (out.get(commentKey(path, side, line)) || []).slice();
+      for (const c of (blob && byBlob.get(commentKey(blob, side, line))) || []) if (!found.includes(c)) found.push(c);
+      return found.length ? found : null;
+    } };
   }
 
   const STATE_WORD = { open: "Open", sent: "Sent to the agent", resolved: "Resolved" };
@@ -55,17 +67,20 @@
         redraw();
       } catch (err) { D.toast(err.message); }
     };
-    const actions = readonly() ? [] : [
-      comment.state === "resolved"
+    // Only the author edits, shares or deletes; anyone who may write can resolve a shared comment.
+    const mine = isMine(feature, comment);
+    const mayResolve = canWrite(feature) && (mine || comment.visibility === "shared");
+    const actions = [
+      mayResolve ? (comment.state === "resolved"
         ? h("button", { class: "btn small", type: "button", onclick: () => act({ state: "open" }) }, "Reopen")
-        : h("button", { class: "btn small", type: "button", onclick: () => act({ state: "resolved" }) }, "Resolve"),
-      h("button", { class: "btn small", type: "button", onclick: () => {
+        : h("button", { class: "btn small", type: "button", onclick: () => act({ state: "resolved" }) }, "Resolve")) : null,
+      canWrite(feature) && mine ? h("button", { class: "btn small", type: "button", onclick: () => {
         clear(card);
         card.appendChild(composer({ body: comment.body, visibility: comment.visibility, submitLabel: "Save changes",
           onCancel: redraw,
           onSubmit: async (body, visibility) => { await act({ body, visibility }); } }));
-      } }, "Edit"),
-      h("button", { class: "btn small", type: "button", onclick: async () => {
+      } }, "Edit") : null,
+      canWrite(feature) && mine ? h("button", { class: "btn small", type: "button", onclick: async () => {
         if (!window.confirm("Delete this comment?")) return;
         try {
           await data.del(`${base}/comments/${comment.id}`);
@@ -73,7 +88,7 @@
           removed();
           D.toast("Comment deleted");
         } catch (err) { D.toast(err.message); }
-      } }, "Delete"),
+      } }, "Delete") : null,
     ];
     card.appendChild(h("div", { class: "comment-meta" },
       h("strong", null, comment.author || "you"),
@@ -84,11 +99,20 @@
       comment.current && comment.current.outdated ? h("span", { class: "chip", title: "The line changed after this comment" }, "Outdated") : null,
       h("span", { class: "spacer" }), actions));
     card.appendChild(markdown(comment.body));
+    if (comment.current && comment.current.outdated && comment.state !== "resolved" && mayResolve) {
+      // The agent changed this code after the comment: offer to close the thread.
+      card.appendChild(h("p", { class: "small outdated-note" }, "This code changed after the comment. ",
+        h("button", { class: "btn small", type: "button", onclick: () => act({ state: "resolved" }) }, "Resolve it"),
+        " if the change answers it."));
+    }
+    if (comment.resolved_by && comment.state === "resolved") {
+      card.appendChild(h("p", { class: "small muted" }, `Resolved by ${comment.resolved_by}`));
+    }
     for (const reply of comment.replies || []) {
       card.appendChild(h("div", { class: "reply" }, h("div", { class: "comment-meta" }, h("strong", null, reply.author), h("span", { class: "when" }, ago(reply.created_at))),
         markdown(reply.body)));
     }
-    if (comment.visibility === "shared" && !readonly()) {
+    if (comment.visibility === "shared" && canWrite(feature)) {
       const replyBtn = h("button", { class: "btn small reply-btn", type: "button", onclick: () => {
         replyBtn.replaceWith(composer({ submitLabel: "Reply", hideVisibility: true, onCancel: redraw,
           onSubmit: async (body) => { await act({ reply: body }); } }));
@@ -171,8 +195,11 @@
     return feature._marks;
   }
 
+  // Marks are private to the reviewer, so hub readers keep them; read-only copies don't.
+  const canMark = () => !D.exported && !(D.meta && D.meta.readonly);
+
   async function toggleMark(feature, hunkId, button) {
-    if (readonly()) return;
+    if (!canMark()) return;
     const marks = markSet(feature);
     const reviewed = !marks.has(hunkId);
     try {
@@ -209,7 +236,7 @@
         if (tag === "\\") return null;
         const side = tag === "-" ? "old" : "new";
         const line = side === "old" ? o : n;
-        if (!readonly()) {
+        if (canWrite(feature)) {
           const cells = tr.querySelectorAll("td.ln");
           const target = side === "old" ? cells[0] : cells[1];
           if (target && line) {
@@ -220,11 +247,11 @@
           }
         }
         const path = side === "old" ? (file.old_path || file.path) : file.path;
-        const found = comments.get(commentKey(path, side, line));
+        const found = comments.get(path, side === "old" ? file.old_blob : file.new_blob, side, line);
         return found ? found.map((c) => commentRow(feature, c)) : null;
       },
       hunkActions(file, hunk) {
-        if (readonly() || !hunk.id || scope !== "feature") return null;
+        if (!canMark() || !hunk.id || scope !== "feature") return null;
         const btn = h("button", { class: "btn small mark-btn", type: "button", dataset: { hunk: hunk.id } });
         setMarkButton(btn, markSet(feature).has(hunk.id));
         btn.addEventListener("click", () => toggleMark(feature, hunk.id, btn));
@@ -250,7 +277,7 @@
 
   D.legActions = function (block, feature) {
     const last = feature.legs[feature.legs.length - 1];
-    if (!last || last.closed_at || readonly()) return;
+    if (!last || last.closed_at || !canWrite(feature)) return;
     const holder = h("div", { class: "prompt-box" });
     const show = (res) => {
       clear(holder);
@@ -305,7 +332,7 @@
       toolbar.appendChild(h("div", { class: "filters", role: "group", "aria-label": "Show comments" },
         [["open", `Open ${counts.open}`], ["sent", `Sent ${counts.sent}`], ["resolved", `Resolved ${counts.resolved}`], ["all", `All ${all.length}`]]
           .map(([id, label]) => h("button", { type: "button", "aria-pressed": String(filter === id), onclick: () => { filter = id; draw(); } }, label))));
-      if (!readonly()) {
+      if (canWrite(feature)) {
         toolbar.appendChild(h("span", { class: "spacer" }));
         toolbar.appendChild(h("button", { class: "btn primary", type: "button", disabled: !selected.size && !counts.open,
           title: !selected.size && !counts.open ? "Select comments to include, or leave some open" : null,
@@ -327,7 +354,7 @@
           const a = c.anchor || {};
           const cur = c.current || {};
           const where = a.side === "old" ? `removed line ${a.line}` : cur.outdated ? `was line ${a.line}` : `line ${cur.line || a.line}`;
-          const check = readonly() ? null : h("input", { type: "checkbox", "aria-label": "Include in the prompt", checked: selected.has(c.id),
+          const check = !canWrite(feature) ? null : h("input", { type: "checkbox", "aria-label": "Include in the prompt", checked: selected.has(c.id),
             onchange: (evt) => { if (evt.currentTarget.checked) selected.add(c.id); else selected.delete(c.id); draw(); } });
           const href = `#/p/${enc(feature.project.project_id)}/f/${enc(feature.feature_id)}/diff?mode=systems&path=${enc(path)}`;
           const item = h("div", { class: "comment-item" }, check,
@@ -391,7 +418,6 @@
   };
 
   // --- new evidence notice (serve --watch) -----------------------------------------------------------
-  let generation = null;
   async function poll() {
     if (readonly() || document.visibilityState !== "visible") return;
     try {
