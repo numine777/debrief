@@ -357,6 +357,14 @@ class ProtocolFixTests(SessionFixture):
         self.run_session(self.repo, "start")
         self.assertEqual(records.load_legs(fdir)[1]["base_ref"], others)
 
+    def test_a_pull_that_gives_up_says_so(self):
+        from debrief import archive, paths
+
+        self.run_session(self.repo, "start")
+        archive.set_remote(paths.project_dir(self.pid), str(self.tmp / "no-such-remote.git"))
+        out = self.run_session(self.repo, "start")
+        self.assertIn("archive pull skipped", out)
+
     def test_launcher_under_home_is_written_with_a_tilde(self):
         import os
 

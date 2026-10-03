@@ -474,6 +474,8 @@ def _maybe_pull(ctx: Context, force: bool = False) -> Optional[str]:
         return f"archive pull failed: {exc}"
     if result.get("conflicts"):
         return f"archive pull kept both versions of: {', '.join(result['conflicts'])}"
+    if not result.get("pulled") and result.get("reason") not in (None, "no remote", "remote has no records yet"):
+        return f"archive pull skipped ({str(result['reason']).splitlines()[0][:120]}); it retries at the next call"
     return None
 
 
