@@ -114,6 +114,14 @@
     });
     if (window.DOMPurify) {
       window.DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+        if (node.tagName === "IMG") {
+          // No remote images: the viewer stays offline even before the CSP steps in.
+          const src = node.getAttribute("src") || "";
+          if (!src.startsWith("data:")) {
+            node.removeAttribute("src");
+            node.setAttribute("title", "Remote image not loaded: Debrief works offline");
+          }
+        }
         if (node.tagName === "A") {
           const href = node.getAttribute("href") || "";
           if (/^https?:/i.test(href)) { node.setAttribute("target", "_blank"); node.setAttribute("rel", "noopener noreferrer"); }
