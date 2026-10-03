@@ -357,6 +357,19 @@ class PhoneLayoutTests(IsolatedTestCase):
             self.assertFalse(wide.locator("select.jump").is_visible())
             self.assertEqual(page.errors + wide.errors, [])
 
+    def test_controls_fit_a_fingertip_and_fields_do_not_zoom(self):
+        with sync_playwright() as p:
+            page = self.open(p, self.feature + "/diff?mode=systems", ".hunk")
+            for selector in (".segmented button", ".ctx-btn", ".mark-btn", ".tabs a", ".search-link"):
+                self.assertGreaterEqual(page.locator(selector).first.bounding_box()["height"], 36, selector)
+            page.locator("tr.add .ln-btn").first.click()
+            size = page.locator(".composer textarea").evaluate("el => getComputedStyle(el).fontSize")
+            self.assertEqual(size, "16px")  # iOS zooms into anything smaller
+            wide = self.open(p, self.feature + "/diff?mode=systems", ".hunk", viewport={"width": 1280, "height": 800},
+                             is_mobile=False, has_touch=False)
+            self.assertLess(wide.locator(".mark-btn").first.bounding_box()["height"], 30)  # desktop stays dense
+            self.assertEqual(page.errors + wide.errors, [])
+
     def test_search_and_help_suit_the_screen(self):
         with sync_playwright() as p:
             page = self.open(p, self.feature, ".feature-head")

@@ -656,6 +656,31 @@ kbd { font-family: var(--font-code); font-size: var(--s-12); border: 1px solid v
   table.code tr:not(.del) td.ln > .ln-old, table.code tr.del td.ln > .ln-new { display: none; }
   tr.comment-row td, tr.composer-row td { padding-left: 0.6rem; }
 }
+/* --- touch: controls sized for a fingertip --------------------------------------------------------- */
+@media (pointer: coarse) {
+  .btn { min-height: 2.5rem; padding: 0.35rem 0.9rem; }
+  .btn.small { min-height: 2.25rem; padding: 0.25rem 0.75rem; font-size: var(--s-14); }
+  .iconbtn { width: 2.75rem; height: 2.75rem; }
+  .segmented button { min-height: 2.5rem; padding: 0.35rem 1rem; }
+  .filters { gap: 0.45rem; }
+  .filters button { min-height: 2.25rem; padding: 0.2rem 0.85rem; font-size: var(--s-14); }
+  .tabs a { padding-top: 0.75rem; padding-bottom: 0.7rem; }
+  .legs .leg { display: inline-block; padding: 0.3rem 0.6rem; font-size: var(--s-14); }
+  .chips { gap: 0.4rem; }
+  .chip { min-height: 1.75rem; padding: 0.15rem 0.65rem; }
+  .strip { height: 28px; }
+  .ctx-btn { min-height: 2.25rem; padding: 0.5rem 0.6rem; font-size: var(--s-13); }
+  .diff-toolbar select, .composer-actions select { min-height: 2.5rem; }
+  .outline li a { padding: 0.55rem 0.4rem; }
+  .target { padding-top: 0.7rem; padding-bottom: 0.7rem; }
+  .map-card .deps li { padding: 0.3rem 0; }
+  .results .r-title { display: inline-block; padding: 0.35rem 0; }
+  .comment-item input[type="checkbox"] { width: 1.35rem; height: 1.35rem; }
+}
+/* Fields under 16 px make iOS zoom the page when they take focus. */
+@media (pointer: coarse), (max-width: 640px) {
+  input, select, textarea { font-size: 16px !important; }
+}
 @media (prefers-reduced-motion: reduce) {
   * { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
 }
