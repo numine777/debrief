@@ -64,13 +64,31 @@
     return out;
   }
 
+  // A wrapped line continues two columns past its own indentation (up to a limit), so on a
+  // narrow screen a long statement still reads as one line of code.
+  const MAX_HANG = 12;
+  function indentWidth(text) {
+    let width = 0;
+    for (const c of text) {
+      if (c === " ") width += 1;
+      else if (c === "\t") width += 4 - (width % 4);
+      else break;
+    }
+    return width;
+  }
+
+  // Both line numbers share one cell, so a phone can show only the one that matters:
+  // the old number on a removed line, the new number everywhere else.
   function lineRow(tag, oldNo, newNo, text, lang, extra) {
     const cls = tag === "+" ? "add" : tag === "-" ? "del" : tag === "\\" ? "note" : "ctx";
+    const num = (n) => (n === null || n === undefined ? "" : String(n));
+    const src = h("td", { class: "src", html: tag === "\\" ? D.escapeHtml(text) : highlightLine(text, lang) });
+    const indent = Math.min(indentWidth(text), MAX_HANG);
+    if (indent) src.style.setProperty("--hang", indent + 2 + "ch");
     const row = h("tr", { class: [cls, extra && extra.cls], dataset: { side: tag === "-" ? "old" : "new", line: String(tag === "-" ? oldNo : newNo || "") } },
-      h("td", { class: "ln" }, oldNo === null || oldNo === undefined ? "" : String(oldNo)),
-      h("td", { class: "ln" }, newNo === null || newNo === undefined ? "" : String(newNo)),
+      h("td", { class: "ln" }, h("span", { class: "ln-old" }, num(oldNo)), h("span", { class: "ln-new" }, num(newNo))),
       h("td", { class: "sign" }, tag === " " ? "" : tag === "\\" ? "" : tag),
-      h("td", { class: "src", html: tag === "\\" ? D.escapeHtml(text) : highlightLine(text, lang) }));
+      src);
     if (extra && extra.title) row.title = extra.title;
     return row;
   }
@@ -124,7 +142,7 @@
     };
     if (rows.length > MAX_INITIAL_LINES * 1.4) {
       appendRows(0, MAX_INITIAL_LINES);
-      const more = h("tr", { class: "more" }, h("td", { colspan: 4 },
+      const more = h("tr", { class: "more" }, h("td", { colspan: 3 },
         h("button", { class: "btn small", type: "button", onclick: () => { more.remove(); appendRows(MAX_INITIAL_LINES, rows.length); } },
           `Show ${rows.length - MAX_INITIAL_LINES} more lines`)));
       tbody.appendChild(more);

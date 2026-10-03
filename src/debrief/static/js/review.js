@@ -47,7 +47,7 @@
 
   function commentRow(feature, comment, onChange) {
     const row = h("tr", { class: "comment-row" });
-    const cell = h("td", { colspan: 4 });
+    const cell = h("td", { colspan: 3 });
     row.appendChild(cell);
     const draw = () => {
       clear(cell);
@@ -161,7 +161,7 @@
     const side = tag === "-" ? "old" : "new";
     const line = side === "old" ? o : n;
     const row = h("tr", { class: "composer-row" });
-    const cell = h("td", { colspan: 4 });
+    const cell = h("td", { colspan: 3 });
     row.appendChild(cell);
     cell.appendChild(composer({
       onCancel: () => row.remove(),
@@ -237,8 +237,8 @@
         const side = tag === "-" ? "old" : "new";
         const line = side === "old" ? o : n;
         if (canWrite(feature)) {
-          const cells = tr.querySelectorAll("td.ln");
-          const target = side === "old" ? cells[0] : cells[1];
+          const numbers = tr.querySelectorAll("td.ln > span");
+          const target = side === "old" ? numbers[0] : numbers[1];
           if (target && line) {
             const btn = h("button", { class: "ln-btn", type: "button", title: "Comment on this line",
               "aria-label": `Comment on ${side === "old" ? "removed " : ""}line ${line} of ${file.path}` }, String(line));

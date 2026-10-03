@@ -175,6 +175,86 @@ class ViewerSmokeTests(IsolatedTestCase):
             browser.close()
 
 
+PHONE = {"viewport": {"width": 390, "height": 844}, "is_mobile": True, "has_touch": True, "device_scale_factor": 2}
+
+PHONE_TESTS_YAML = """tests:
+  - id: app-tests
+    validates: [app]
+    claim: "Main returns one after computing the answer, whatever the four arguments are."
+    kind: unit
+    anchors: []
+    command: "python3 -c 'print(1)'"
+    claimed_result: pass
+gaps: []
+"""
+
+
+@unittest.skipIf(sync_playwright is None, "Playwright is not installed")
+class PhoneLayoutTests(IsolatedTestCase):
+    """The viewer on a phone-sized touch screen."""
+
+    def setUp(self):
+        super().setUp()
+        tail = "".join(f"x{i} = {i}\n" for i in range(30))
+        repo = self.make_repo(files={"app.py": "def main():\n    return 0\n" + tail, "util.py": "x = 1\ny = 2\n"})
+        git(repo, "checkout", "-q", "-b", "feat/phone")
+        self.pid = self.init_project(repo)
+        fdir = self.feature_dir(self.pid, "feat--phone")
+        self.run_session(repo, "start")
+        long_line = "        answer = compute_the_answer(first_argument, second_argument, third_argument, fourth)\n"
+        self.commit(repo, "Change main\n\nReturns one.", {"app.py": "def main():\n    if True:\n" + long_line + "        return 1\n" + tail})
+        self.commit(repo, "Drop y from util\n\nNothing reads it.", {"util.py": "x = 1\n"})
+        self.run_session(repo, "now")
+        self.write_records(fdir, tests_yaml=PHONE_TESTS_YAML)
+        for sid, title, path, deps in (("app", "App", "app.py", "[{system: util, relation: reads x}]"), ("util", "Util", "util.py", "[]")):
+            self.write(fdir / "systems" / f"{sid}.md", (
+                f"---\nid: {sid}\ntitle: {title}\nchange: new\ndepends_on: {deps}\n"
+                f"anchors:\n  - {{path: {path}, role: core}}\ncritical_paths: []\ndecisions: []\n---\n\n"
+                "## Purpose\nP.\n\n## Change\nNew.\n\n## How it works\nH.\n\n## Limitations\nL.\n"))
+        ingest.ingest_feature(self.pid, "feat--phone")
+        self.server = make_server(0, root=self.archive)
+        self.port = self.server.server_address[1]
+        self.server.app.allowed_hosts.add(f"127.0.0.1:{self.port}")
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.base = f"http://127.0.0.1:{self.port}/"
+        self.feature = f"#/p/{self.pid}/f/feat--phone"
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        super().tearDown()
+
+    def open(self, p, route, wait, **context):
+        page = p.chromium.launch().new_context(**dict(PHONE, **context)).new_page()
+        page.errors = []
+        page.on("pageerror", lambda err: page.errors.append(str(err)))
+        page.on("console", lambda msg: page.errors.append(msg.text) if msg.type == "error" else None)
+        page.goto(self.base + route)
+        page.locator(wait).first.wait_for()
+        return page
+
+    def test_code_rows_show_one_line_number_and_hang_wrapped_lines(self):
+        with sync_playwright() as p:
+            page = self.open(p, self.feature + "/diff?mode=systems", ".hunk")
+            long_line = page.locator("tr.add", has_text="compute_the_answer")
+            self.assertEqual(long_line.locator("td.ln > span:visible").count(), 1)
+            self.assertEqual(long_line.locator("td.ln > span:visible").inner_text(), "3")
+            removed = page.locator(".file", has_text="util.py").locator("tr.del")
+            self.assertEqual(removed.locator("td.ln > span:visible").inner_text(), "2")
+            unchanged = page.locator(".file", has_text="app.py").locator("tr.ctx").first
+            self.assertEqual(unchanged.locator("td.ln > span:visible").count(), 1)
+            # The long line wraps, and its continuation hangs two columns past its eight spaces.
+            src = long_line.locator("td.src")
+            self.assertEqual(src.evaluate("el => el.style.getPropertyValue('--hang')"), "10ch")
+            self.assertGreater(src.bounding_box()["height"], 40)
+            # Wider screens keep both columns.
+            wide = self.open(p, self.feature + "/diff?mode=systems", ".hunk", viewport={"width": 1280, "height": 900},
+                             is_mobile=False, has_touch=False)
+            row = wide.locator(".file", has_text="app.py").locator("tr.ctx").first
+            self.assertEqual(row.locator("td.ln > span:visible").count(), 2)
+            self.assertEqual(page.errors + wide.errors, [])
+
+
 @unittest.skipIf(sync_playwright is None, "Playwright is not installed")
 class HubUiTests(IsolatedTestCase):
     def test_sign_in_then_browse(self):

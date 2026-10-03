@@ -427,11 +427,15 @@ table.grid td .tid { white-space: nowrap; }
 .ctx-btn { display: block; width: 100%; border: 0; background: var(--sheet-2); color: var(--ink-3); font-size: var(--s-12); padding: 0.15rem 0.6rem; text-align: left; cursor: pointer; font-family: var(--font-code); }
 .ctx-btn:hover { color: var(--ink); background: var(--focus-wash); }
 
-table.code { border-collapse: collapse; width: 100%; font-family: var(--font-code); font-size: 12.5px; line-height: 1.5; color: var(--code-ink); table-layout: fixed; }
+table.code { border-collapse: collapse; width: 100%; font-family: var(--font-code); font-size: 12.5px; line-height: 1.5; color: var(--code-ink); table-layout: fixed; tab-size: 4; }
 table.code td { padding: 0 0.5rem; vertical-align: top; }
-table.code td.ln { width: 3.4rem; text-align: right; color: var(--ink-3); user-select: none; font-size: 11.5px; padding-top: 1px; }
+/* One cell holds both line numbers; each sits in its own right-aligned half. */
+table.code td.ln { width: 6.8rem; padding: 1px 0 0; color: var(--ink-3); user-select: none; font-size: 11.5px; white-space: nowrap; }
+table.code td.ln > span { display: inline-block; width: 50%; padding-right: 0.5rem; text-align: right; }
 table.code td.sign { width: 1.2rem; user-select: none; color: var(--ink-3); padding: 0 0.2rem; text-align: center; }
-table.code td.src { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+/* Wrapped lines hang under their own indentation (--hang is set per line from its leading whitespace). */
+table.code td.src { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
+  padding-left: calc(0.5rem + var(--hang, 2ch)); text-indent: calc(-1 * var(--hang, 2ch)); }
 table.code tr.add td { background: var(--add-bg); }
 table.code tr.add td.sign { color: var(--add-sign); }
 table.code tr.del td { background: var(--del-bg); }
@@ -578,7 +582,11 @@ kbd { font-family: var(--font-code); font-size: var(--s-12); border: 1px solid v
   .tl li { grid-template-columns: minmax(0, 1fr); gap: 0.15rem; }
   .queue-item { grid-template-columns: minmax(0, 1fr); }
   .queue-item .links { justify-content: flex-start; }
-  table.code td.ln { width: 2.6rem; }
+  /* One line number per row: the old one on a removed line, the new one otherwise. */
+  table.code td.ln { width: 2.8rem; }
+  table.code td.ln > span { width: 100%; }
+  table.code tr:not(.del) td.ln > .ln-old, table.code tr.del td.ln > .ln-new { display: none; }
+  tr.comment-row td, tr.composer-row td { padding-left: 0.6rem; }
 }
 @media (prefers-reduced-motion: reduce) {
   * { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
