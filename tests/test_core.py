@@ -92,6 +92,27 @@ class ProjectTests(IsolatedTestCase):
         entry = projects.registered_projects()[first.project_id]
         self.assertEqual(len(entry["common_dirs"]), 1)
 
+    def test_ssh_and_https_remotes_of_one_repo_agree(self):
+        pairs = [
+            ("git@ssh.dev.azure.com:v3/Org/Proj/Repo", "https://org@dev.azure.com/org/Proj/_git/Repo"),
+            ("org@vs-ssh.visualstudio.com:v3/org/proj/repo", "https://org.visualstudio.com/DefaultCollection/proj/_git/repo"),
+            ("ssh://git@bitbucket.corp:7999/proj/repo.git", "https://bitbucket.corp/scm/proj/repo.git"),
+        ]
+        for ssh, https in pairs:
+            self.assertEqual(projects.normalize_remote(ssh), projects.normalize_remote(https), (ssh, https))
+        self.assertEqual(projects.normalize_remote(pairs[0][0]), "dev.azure.com/org/proj/repo")
+
+    def test_credentials_in_the_origin_url_are_not_stored(self):
+        repo = self.make_repo(remote="https://alice:ghp_SECRET123@git.corp.example/team/svc.git")
+        result = projects.init_project(repo)
+        stored = (result.project_dir / "project.json").read_text()
+        self.assertNotIn("SECRET", stored)
+        self.assertNotIn("alice", stored)
+        self.assertIn("https://git.corp.example/team/svc.git", stored)
+        self.assertEqual(projects.redact_remote("ssh://git@host/x.git"), "ssh://git@host/x.git")
+        self.assertEqual(projects.redact_remote("ssh://git:pw@host/x.git"), "ssh://host/x.git")
+        self.assertEqual(projects.redact_remote("git@host:x.git"), "git@host:x.git")
+
     def test_repo_without_remote_gets_path_id(self):
         repo = self.make_repo("my-service")
         pid = projects.init_project(repo).project_id

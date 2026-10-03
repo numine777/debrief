@@ -18,17 +18,55 @@ from . import archive, gitutil, paths, residency, util
 
 
 def normalize_remote(url: str) -> str:
-    """Canonical ``host/path`` form of a git remote URL."""
+    """Canonical ``host/path`` form of a git remote URL.
+
+    SSH and HTTPS remotes of one repository must agree, or two hosts would keep
+    separate archives for it: hosting services that spell the two differently
+    (Azure DevOps, Bitbucket Server) are folded into one form.
+    """
     text = url.strip()
     text = re.sub(r"^[a-z+]+://", "", text)          # scheme
-    text = re.sub(r"^[^@/]+@", "", text)              # user@
+    text = re.sub(r"^[^@/]+@", "", text)              # user@ (and any password)
     if "/" not in text.split(":", 1)[0] and ":" in text and not re.match(r"^[^:]+:\d+/", text):
         text = text.replace(":", "/", 1)              # scp-like host:path
     text = re.sub(r"^([^/:]+):\d+/", r"\1/", text)     # host:port/
     text = text.rstrip("/")
     if text.endswith(".git"):
         text = text[:-4]
-    return text.lower()
+    text = text.lower()
+    # Azure DevOps: ssh.dev.azure.com/v3/org/proj/repo, dev.azure.com/org/proj/_git/repo, org.visualstudio.com/...
+    match = re.match(r"^(?:ssh\.dev\.azure\.com|vs-ssh\.visualstudio\.com)/v3/([^/]+)/([^/]+)/([^/]+)$", text)
+    if match:
+        return "dev.azure.com/" + "/".join(match.groups())
+    match = re.match(r"^dev\.azure\.com/([^/]+)/([^/]+)/_git/([^/]+)$", text)
+    if match:
+        return "dev.azure.com/" + "/".join(match.groups())
+    match = re.match(r"^([^./]+)\.visualstudio\.com/(?:defaultcollection/)?([^/]+)/_git/([^/]+)$", text)
+    if match:
+        return "dev.azure.com/" + "/".join(match.groups())
+    # Bitbucket Server serves HTTPS clones under /scm/ and SSH clones without it.
+    return re.sub(r"^([^/]+)/scm/", r"\1/", text)
+
+
+def redact_remote(url: Optional[str]) -> Optional[str]:
+    """A remote URL safe to store and sync: no credentials (``https://user:token@host`` loses them)."""
+    if not url:
+        return url
+    from urllib.parse import urlsplit, urlunsplit
+
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if not parts.scheme or "@" not in parts.netloc:
+        return url  # scp-like user@host:path carries a user name, never a secret
+    userinfo, _, hostport = parts.netloc.rpartition("@")
+    user, has_password, _ = userinfo.partition(":")
+    if parts.scheme in ("http", "https"):
+        netloc = hostport  # an HTTPS user name is often a token itself
+    else:
+        netloc = f"{user}@{hostport}" if user and not has_password else hostport
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
 def project_id_for(remote: Optional[str], common_dir: Optional[Path]) -> str:
@@ -124,7 +162,7 @@ def init_project(repo: Path | str, remote: Optional[str] = None, name: Optional[
     meta = util.read_json(meta_path, {}) or {}
     meta.setdefault("project_id", project_id)
     meta.setdefault("created_at", util.now_iso())
-    meta["remote_url"] = origin
+    meta["remote_url"] = redact_remote(origin)
     meta["display_name"] = name or meta.get("display_name") or display_name_for(origin, common)
     util.write_json(meta_path, meta)
     if remote:

@@ -116,7 +116,7 @@ class Api:
             by_project[pid] = {
                 "project_id": pid,
                 "display_name": meta.get("display_name") or pid,
-                "remote_url": meta.get("remote_url"),
+                "remote_url": projects.redact_remote(meta.get("remote_url")),
                 "on_this_host": pid in registry,
                 "features": [],
             }
@@ -204,7 +204,7 @@ class Api:
         evidence["files"] = summary_files
         return {
             "project": {"project_id": pid, "display_name": project_meta.get("display_name") or pid,
-                        "remote_url": project_meta.get("remote_url")},
+                        "remote_url": projects.redact_remote(project_meta.get("remote_url"))},
             "feature_id": fid,
             "title": brief_meta.get("title") or fid,
             "status": brief_meta.get("status") or "in_progress",
