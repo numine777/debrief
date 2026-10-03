@@ -345,19 +345,33 @@ def normalize_query(symbol: str) -> str:
 
 def find(symbols: List[Symbol], query: str) -> Optional[Symbol]:
     """Resolve an anchor's symbol: exact name, then unique suffix, then unique last name."""
+    found = matches(symbols, query)
+    return found[0] if found else None
+
+
+def matches(symbols: List[Symbol], query: str) -> List[Symbol]:
+    """Every symbol an anchor's name could mean, best first; more than one means it's ambiguous."""
     wanted = normalize_query(query)
     if not wanted:
-        return None
-    for sym in symbols:
-        if sym.name == wanted:
-            return sym
+        return []
+    exact = [sym for sym in symbols if sym.name == wanted]
+    if exact:
+        return exact[:1]
     lowered = wanted.lower()
-    for sym in symbols:
-        if sym.name.lower() == lowered:
-            return sym
+    folded = [sym for sym in symbols if sym.name.lower() == lowered]
+    if folded:
+        return folded[:1]
     suffix = [s for s in symbols if s.name.endswith("." + wanted)]
     if suffix:
-        return min(suffix, key=lambda s: (s.name.count("."), s.start))
+        ranked = sorted(suffix, key=lambda s: (s.name.count("."), s.start))
+        # Nested definitions share a suffix with their owner's methods; only same-depth ones are rivals.
+        depth = ranked[0].name.count(".")
+        return [s for s in ranked if s.name.count(".") == depth]
+    found = _by_last_name(symbols, wanted)
+    return [found] if found else []
+
+
+def _by_last_name(symbols: List[Symbol], wanted: str) -> Optional[Symbol]:
     last = wanted.split(".")[-1]
     by_last = [s for s in symbols if s.name.split(".")[-1] == last]
     if len(by_last) == 1:

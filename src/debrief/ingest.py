@@ -420,17 +420,28 @@ class FeatureIngest:
             removed = anchor.get("role") == "removed"
             rev = base if removed else self.head_rev
             text = self.text_at(rev, anchor["path"]) if rev else None
-            exists = text is not None or (not removed and self._path_is_dir(anchor["path"]))
-            status, rng, reason = "stale", None, None
+            binary = text is None and bool(rev) and self._file_exists(rev, anchor["path"])
+            exists = text is not None or binary or (not removed and self._path_is_dir(anchor["path"]))
+            status, rng, reason, ambiguous = "stale", None, None, None
             if text is None and not exists:
                 reason = "file not found at the feature's " + ("base" if removed else "head")
+            elif binary:
+                # A binary file has no symbols or lines to point at; its path is the whole anchor.
+                status = "path"
+                if anchor.get("symbol") or anchor.get("lines"):
+                    reason = "binary file: anchored by its path"
             else:
                 line_count = len(text.splitlines()) if text is not None else 0
                 if anchor.get("symbol") and text is not None:
                     syms = symbols.index(anchor["path"], text) if removed else self.symbols_at_head(anchor["path"])
-                    found = symbols.find(syms, anchor["symbol"])
-                    if found:
+                    candidates = symbols.matches(syms, anchor["symbol"])
+                    if candidates:
+                        found = candidates[0]
                         status, rng = "symbol", [found.start, found.end]
+                        if len(candidates) > 1:
+                            ambiguous = [c.name for c in candidates]
+                            reason = (f"symbol {anchor['symbol']} could mean {', '.join(ambiguous)}; "
+                                      f"used {found.name}. Name the one you mean")
                     else:
                         reason = f"symbol {anchor['symbol']} not found"
                 if status == "stale" and anchor.get("lines"):
@@ -450,9 +461,14 @@ class FeatureIngest:
                 "critical_path": src["critical_path"], "index": src["index"],
                 "path": anchor["path"], "symbol": anchor.get("symbol"), "lines": anchor.get("lines"),
                 "role": anchor.get("role"), "side": "old" if removed else "new",
-                "status": status, "range": rng, "reason": reason,
+                "status": status, "range": rng, "reason": reason, "binary": binary, "ambiguous": ambiguous,
             })
         return resolved
+
+    def _file_exists(self, rev: str, path: str) -> bool:
+        if rev == "WORKTREE" and self.worktree is not None:
+            return (self.worktree / path).is_file()
+        return gitutil.try_run(["cat-file", "-t", f"{rev}:{path}"], self.repo) == "blob"
 
     def _path_is_dir(self, path: str) -> bool:
         if self.head_rev == "WORKTREE" and self.worktree is not None:
@@ -473,6 +489,9 @@ class FeatureIngest:
                        rule_set: List[rules.Rule], tests_by_target: Dict[str, List[str]]):
         path = fp.path
         noise = diffparse.classify_noise(path)
+        if not fp.hunks and not fp.binary:
+            # Renamed or copied without edits, or only the mode changed: nothing to explain.
+            noise = noise or ("rename" if fp.status in ("R", "C") else "mode" if fp.old_mode != fp.new_mode else None)
         is_incidental = records.is_incidental(path, incidental) or (fp.old_path and records.is_incidental(fp.old_path, incidental))
         new_anchors = [a for a in anchors if a["side"] == "new" and a["path"] == path]
         old_anchors = [a for a in anchors if a["side"] == "old" and fp.old_path and a["path"] == fp.old_path]
@@ -480,44 +499,29 @@ class FeatureIngest:
         file_flags = rules.scan(rule_set, path, fp.hunks) if not (fp.binary or noise) else []
         cp_ranges = [a for a in new_anchors if a["critical_path"] and a["range"]]
         hunks_out, units = [], []
-        hunk_list = fp.hunks or [None]
-        for hunk in hunk_list:
-            claims: List[dict] = []
-            cps: List[str] = []
+        for hunk in fp.hunks or [None]:
             if hunk is not None:
-                rng_new = hunk.new_range()
-                rng_old = hunk.old_range()
-                for a in new_anchors:
-                    if a["range"] and (fp.status != "D") and diffparse.ranges_overlap(a["range"], tuple(rng_new)):
-                        claims.append({"by": a["owner"], "kind": a["owner_kind"], "strength": "strong",
-                                       "critical_path": a["critical_path"]})
-                        if a["critical_path"]:
-                            cps.append(f"{a['owner']}/{a['critical_path']}")
-                for a in old_anchors:
-                    if a["range"] and diffparse.ranges_overlap(a["range"], tuple(rng_old)):
-                        claims.append({"by": a["owner"], "kind": a["owner_kind"], "strength": "strong", "critical_path": None})
                 hid = hunk.id
+                blocks = [self._block_evidence(fp, b, new_anchors, old_anchors, dir_anchors, is_incidental, noise)
+                          for b in hunk.blocks()]
+                state = _hunk_state(blocks)
+                claims = _dedupe_claims([c for b in blocks for c in b["claims"]])
+                cps = sorted({cp for b in blocks for cp in b["critical_paths"]})
             else:
                 hid = util.short_hash(f"{path}\n{fp.old_blob}\n{fp.new_blob}\n{fp.status}")
+                blocks = []
+                claims = []
                 for a in new_anchors + old_anchors:
                     if a["status"] != "stale":
-                        claims.append({"by": a["owner"], "kind": a["owner_kind"],
-                                       "strength": "strong" if fp.status in ("R", "C") or a["range"] else "weak",
+                        strong = fp.status in ("R", "C") or a["range"] or (fp.binary and a.get("binary"))
+                        claims.append({"by": a["owner"], "kind": a["owner_kind"], "strength": "strong" if strong else "weak",
                                        "critical_path": None})
-            if not any(c["strength"] == "strong" for c in claims):
-                for a in new_anchors + old_anchors + dir_anchors:
-                    if a["status"] == "path":
-                        claims.append({"by": a["owner"], "kind": a["owner_kind"], "strength": "weak", "critical_path": None})
-            claims = _dedupe_claims(claims)
-            strong = any(c["strength"] == "strong" for c in claims)
-            if strong:
-                state = "covered"
-            elif is_incidental or noise:
-                state = "incidental"
-            elif claims:
-                state = "weak"
-            else:
-                state = "unclaimed"
+                if not any(c["strength"] == "strong" for c in claims):
+                    claims += [{"by": a["owner"], "kind": a["owner_kind"], "strength": "weak", "critical_path": None}
+                               for a in dir_anchors]
+                claims = _dedupe_claims(claims)
+                state = _state_for(claims, bool(is_incidental or noise))
+                cps = []
             systems_claiming = sorted({c["by"] for c in claims if c["kind"] == "system" and c["strength"] == "strong"})
             tests = sorted({t for sid in systems_claiming for t in tests_by_target.get(sid, [])}
                            | {t for cp in cps for t in tests_by_target.get(cp, [])}
@@ -531,7 +535,7 @@ class FeatureIngest:
                 "id": hid,
                 "state": state,
                 "claims": claims,
-                "critical_paths": sorted(set(cps)),
+                "critical_paths": cps,
                 "tests": tests,
                 "flags": [f["rule"] for f in hunk_flags if not f.get("declared")],
             }
@@ -542,8 +546,11 @@ class FeatureIngest:
                     "additions": hunk.additions, "deletions": hunk.deletions,
                     "whitespace_only": hunk.whitespace_only(),
                 })
-                enclosing = symbols.enclosing(self.symbols_at_head(path), hunk.new_range()[0]) if fp.status != "D" else None
+                # Label the hunk by the code that changed, not by its first context line.
+                enclosing = symbols.enclosing(self.symbols_at_head(path), hunk.changed_line()) if fp.status != "D" else None
                 hunk_entry["symbol"] = enclosing.name if enclosing else None
+                # Each run of changed lines, with what explains it: the queue and the viewer point at these.
+                hunk_entry["blocks"] = [{k: b[k] for k in ("new", "old", "state", "by", "size")} for b in blocks]
             hunks_out.append(hunk_entry)
             units.append({"path": path, "hunk": hid, "state": state,
                           "size": (hunk.additions + hunk.deletions) if hunk is not None else 1})
@@ -564,6 +571,40 @@ class FeatureIngest:
         return dict(counts, units=total, ratio=(round(explained / total, 4) if total else None))
 
     # --- tests -----------------------------------------------------------------------------------------
+
+    def _block_evidence(self, fp: diffparse.FilePatch, block: diffparse.Block, new_anchors: List[dict],
+                        old_anchors: List[dict], dir_anchors: List[dict], is_incidental, noise) -> dict:
+        """Claims on one run of changed lines: anchors must reach a changed line, not just the hunk's context."""
+        claims: List[dict] = []
+        cps: List[str] = []
+        if fp.status != "D":
+            for a in new_anchors:
+                if a["range"] and diffparse.ranges_overlap(a["range"], block.new_range):
+                    claims.append({"by": a["owner"], "kind": a["owner_kind"], "strength": "strong",
+                                   "critical_path": a["critical_path"]})
+                    if a["critical_path"]:
+                        cps.append(f"{a['owner']}/{a['critical_path']}")
+        if block.old_range:
+            for a in old_anchors:
+                if a["range"] and diffparse.ranges_overlap(a["range"], block.old_range):
+                    claims.append({"by": a["owner"], "kind": a["owner_kind"], "strength": "strong", "critical_path": None})
+        if not any(c["strength"] == "strong" for c in claims):
+            for a in new_anchors + old_anchors + dir_anchors:
+                if a["status"] == "path":
+                    claims.append({"by": a["owner"], "kind": a["owner_kind"], "strength": "weak", "critical_path": None})
+        claims = _dedupe_claims(claims)
+        state = _state_for(claims, bool(is_incidental or noise))
+        if state == "unclaimed" and block.whitespace_only:
+            state = "incidental"  # re-indenting or trailing space needs no explanation
+        return {
+            "new": list(block.new_range) if fp.status != "D" else None,
+            "old": list(block.old_range) if block.old_range else None,
+            "state": state,
+            "claims": claims,
+            "by": sorted({c["by"] for c in claims if c["strength"] == "strong"}),
+            "critical_paths": cps,
+            "size": block.size,
+        }
 
     @staticmethod
     def _norm_cmd(cmd: str) -> str:
@@ -767,27 +808,43 @@ class FeatureIngest:
                 mapping = diffparse.line_map(commit_text, head_text)
         for hunk in fp.hunks:
             row = {"id": hunk.id, "head_range": None, "systems": [], "tests": [], "critical_paths": []}
-            if usable:
-                start, end = hunk.new_range()
-                rng = (start, end) if mapping is None else diffparse.map_range(mapping, start, end)
+            states = []
+            spans = []
+            for block in hunk.blocks():
+                block_claimed = False
+                rng = None
+                if usable:
+                    start, end = block.new_range
+                    rng = (start, end) if mapping is None else diffparse.map_range(mapping, start, end)
                 if rng is not None:
-                    row["head_range"] = list(rng)
+                    spans.append(rng)
                     for a in file_anchors:
                         if diffparse.ranges_overlap(a["range"], rng):
+                            block_claimed = True
                             key = "systems" if a["owner_kind"] == "system" else "tests"
                             if a["owner"] not in row[key]:
                                 row[key].append(a["owner"])
                             if a["critical_path"]:
-                                row["critical_paths"].append(f"{a['owner']}/{a['critical_path']}")
+                                cp = f"{a['owner']}/{a['critical_path']}"
+                                if cp not in row["critical_paths"]:
+                                    row["critical_paths"].append(cp)
+                if block_claimed:
+                    states.append("covered")
+                elif incidental or block.whitespace_only:
+                    states.append("incidental")
+                elif usable and rng is None and block.additions > 0:
+                    states.append("superseded")  # later commits replaced every line it added
+                else:
+                    states.append("unclaimed")
+            if spans:
+                row["head_range"] = [min(a for a, _ in spans), max(b for _, b in spans)]
             hit.update(row["systems"])
-            if row["systems"] or row["tests"]:
-                row["state"] = "covered"
-            elif incidental:
-                row["state"] = "incidental"
-            elif usable and row["head_range"] is None and hunk.new_len > 0:
-                row["state"] = "superseded"
+            for state in ("unclaimed", "covered", "incidental", "superseded"):
+                if state in states:
+                    row["state"] = state
+                    break
             else:
-                row["state"] = "unclaimed"
+                row["state"] = "incidental" if incidental else "unclaimed"
             rows.append(row)
         return hit, rows
 
@@ -819,11 +876,20 @@ class FeatureIngest:
         for f in files:
             for h in f["hunks"]:
                 line = h.get("new_start") if f["status"] != "D" else h.get("old_start")
+                blocks = h.get("blocks") or []
                 if h["state"] == "unclaimed" and not h.get("whitespace_only"):
-                    size = h.get("additions", 0) + h.get("deletions", 0)
+                    open_blocks = [b for b in blocks if b["state"] == "unclaimed"]
+                    if open_blocks:  # point at the change nothing explains, not at the hunk's context
+                        first = open_blocks[0]
+                        line = (first["new"] or first["old"] or [line])[0]
+                        size = sum(b["size"] for b in open_blocks)
+                    else:
+                        size = h.get("additions", 0) + h.get("deletions", 0)
+                    explained = sorted({who for b in blocks for who in b["by"]})
                     add("unclaimed-hunk", "high" if size >= 30 else "medium",
                         f"Unexplained change in {f['path']}" + (f" ({h['symbol']})" if h.get("symbol") else ""),
-                        f"{size} changed lines that no system anchors and the brief doesn't list as incidental.",
+                        f"{size} changed lines that no system anchors and the brief doesn't list as incidental."
+                        + (f" The rest of this hunk is explained by {', '.join(explained)}." if explained else ""),
                         path=f["path"], line=line, hunk_id=h["id"], near=self._near(f["path"], line or 1, anchors))
                 elif h["state"] == "weak":
                     add("weak-claim", "low", f"Only a path anchor explains {f['path']}",
@@ -833,6 +899,9 @@ class FeatureIngest:
             if a["status"] == "stale":
                 add("stale-anchor", "medium", f"Stale anchor in {a['record']}",
                     f"{a['path']}" + (f" {a['symbol']}" if a.get("symbol") else "") + f": {a['reason']}",
+                    undeclared=False, record=a["record"], path=a["path"], owner=a["owner"])
+            elif a.get("ambiguous"):
+                add("ambiguous-anchor", "medium", f"Ambiguous anchor in {a['record']}", f"{a['path']}: {a['reason']}.",
                     undeclared=False, record=a["record"], path=a["path"], owner=a["owner"])
         for t in tests:
             if t["status"] == "verified_fail" and t["claimed_result"] == "pass":
@@ -882,6 +951,66 @@ class FeatureIngest:
             return None
         a = best[1]
         return {"system": a["owner"], "critical_path": a["critical_path"], "distance": best[0]}
+
+
+# Flags that change how much a test command prints, not what it runs.
+_QUIET_FLAGS = {"-v", "-vv", "-vvv", "-q", "-qq", "--verbose", "--quiet", "--color=yes", "--color=no", "--no-header",
+                "--color=always", "--color=never"}
+
+
+def command_key(command: str) -> List[str]:
+    """A test command as the words it runs, so quoting and spacing don't matter but every argument does."""
+    import shlex
+
+    try:
+        words = shlex.split(command or "", comments=False)
+    except ValueError:
+        words = (command or "").split()
+    return [w for w in words if w not in _QUIET_FLAGS]
+
+
+def run_key(run: dict) -> List[str]:
+    argv = run.get("argv")
+    if isinstance(argv, list) and len(argv) > 1:
+        return [w for w in argv if w not in _QUIET_FLAGS]
+    return command_key(argv[0] if isinstance(argv, list) and argv else run.get("command", ""))
+
+
+def _write_text_if_changed(path: Path, text: str) -> None:
+    try:
+        if path.read_text(encoding="utf-8") == text:
+            return
+    except (OSError, UnicodeDecodeError):
+        pass
+    util.write_text(path, text)
+
+
+def _write_json_if_changed(path: Path, data: dict) -> None:
+    _write_text_if_changed(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+
+def _state_for(claims: List[dict], incidental: bool) -> str:
+    if any(c["strength"] == "strong" for c in claims):
+        return "covered"
+    if incidental:
+        return "incidental"
+    return "weak" if claims else "unclaimed"
+
+
+def _hunk_state(blocks: List[dict]) -> str:
+    """A hunk is only as explained as its least explained change."""
+    states = {b["state"] for b in blocks}
+    for state in ("unclaimed", "weak", "covered", "incidental"):
+        if state in states:
+            return state
+    return "unclaimed"
+
+
+def _same_evidence(a: dict, b: dict) -> bool:
+    # Where and when it was computed doesn't make evidence different (and must not cause sync churn).
+    strip = ("computed_at", "computed_on", "worktree", "stale_note")
+    return {k: v for k, v in a.items() if k not in strip} == \
+        json.loads(json.dumps({k: v for k, v in b.items() if k not in strip}))
 
 
 def _dedupe_claims(claims: List[dict]) -> List[dict]:

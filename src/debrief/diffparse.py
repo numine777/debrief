@@ -10,7 +10,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import re
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, NamedTuple, Optional, Tuple
 
 _HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$")
 _INDEX_RE = re.compile(r"^index ([0-9a-f]+)\.\.([0-9a-f]+)(?: (\d+))?$")
@@ -49,6 +49,20 @@ def _strip_prefix(path: str) -> Optional[str]:
     if path[:2] in ("a/", "b/"):
         return path[2:]
     return path
+
+
+class Block(NamedTuple):
+    """One run of changed lines inside a hunk."""
+
+    new_range: Tuple[int, int]  # added lines, or the two lines around a pure deletion
+    old_range: Optional[Tuple[int, int]]  # removed lines
+    additions: int
+    deletions: int
+    whitespace_only: bool
+
+    @property
+    def size(self) -> int:
+        return self.additions + self.deletions
 
 
 class Hunk:
@@ -103,6 +117,62 @@ class Hunk:
         removed = "".join("".join(t.split()) for tag, t in self.lines if tag == "-")
         added = "".join("".join(t.split()) for tag, t in self.lines if tag == "+")
         return bool(self.lines) and removed == added
+
+    def blocks(self) -> List["Block"]:
+        """Runs of consecutive changed lines, the units a claim must reach.
+
+        Context lines never count: a system anchored at the function above a
+        change doesn't explain it, and two changes git fused into one hunk
+        (they were within six lines) are judged separately.
+        """
+        out: List[Block] = []
+        added: List[int] = []
+        removed: List[int] = []
+        a_text: List[str] = []
+        r_text: List[str] = []
+        pos = self.new_start
+        old, new = self.old_start, self.new_start
+
+        def flush() -> None:
+            if not added and not removed:
+                return
+            if added:
+                new_range = (added[0], added[-1])
+            elif self.new_len == 0:  # git writes the line before the change when nothing is left
+                new_range = (max(self.new_start, 1), self.new_start + 1)
+            else:
+                new_range = (max(pos - 1, 1), pos)
+            out.append(Block(new_range, (removed[0], removed[-1]) if removed else None, len(added), len(removed),
+                             "".join("".join(t.split()) for t in r_text) == "".join("".join(t.split()) for t in a_text)))
+            added.clear()
+            removed.clear()
+            a_text.clear()
+            r_text.clear()
+
+        for tag, text in self.lines:
+            if tag == "+":
+                if not added and not removed:
+                    pos = new
+                added.append(new)
+                a_text.append(text)
+                new += 1
+            elif tag == "-":
+                if not added and not removed:
+                    pos = new
+                removed.append(old)
+                r_text.append(text)
+                old += 1
+            elif tag == " ":
+                flush()
+                old += 1
+                new += 1
+        flush()
+        return out
+
+    def changed_line(self) -> int:
+        """The first new-side line of the first change, for labels and links."""
+        blocks = self.blocks()
+        return blocks[0].new_range[0] if blocks else max(self.new_start, 1)
 
     def to_dict(self, with_lines: bool = True) -> dict:
         data = {
