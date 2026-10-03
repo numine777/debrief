@@ -36,6 +36,8 @@ class Rule:
         self.exclude = list(data.get("exclude") or [])
         self.once_per_file = bool(data.get("once_per_file"))
         self.code_only = bool(data.get("code_only"))
+        # Also match across the next added line (``except Exception:`` then ``pass``).
+        self.join_next = bool(data.get("join_next"))
 
     def applies_to(self, path: str) -> bool:
         if self.paths and not any(glob_match(p, path) for p in self.paths):
@@ -86,9 +88,11 @@ def scan(rules: Iterable[Rule], path: str, hunks) -> List[dict]:
         return flags
     fired_once = set()
     for hunk in hunks:
-        for tag, old_line, new_line, text in hunk.numbered():
+        lines = list(hunk.numbered())
+        for index, (tag, old_line, new_line, text) in enumerate(lines):
             if tag not in "+-":
                 continue
+            following = lines[index + 1][3] if index + 1 < len(lines) and lines[index + 1][0] == tag else None
             for rule in applicable:
                 if rule.on == "added" and tag != "+":
                     continue
@@ -97,6 +101,8 @@ def scan(rules: Iterable[Rule], path: str, hunks) -> List[dict]:
                 if rule.once_per_file and rule.id in fired_once:
                     continue
                 subject = code_text(text) if rule.code_only else text
+                if rule.join_next and following is not None:
+                    subject += "\n" + (code_text(following) if rule.code_only else following)
                 if not rule.pattern.search(subject):
                     continue
                 fired_once.add(rule.id)

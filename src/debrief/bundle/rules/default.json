@@ -40,7 +40,7 @@
       "kind": "retry",
       "severity": "high",
       "on": "added",
-      "pattern": "(?i)\\b(?:retry|retries|retrying|backoff|max_?attempts|with_retries|tenacity|exponential)\\b",
+      "pattern": "@\\s*(?:[\\w.]+\\.)?(?:retry\\w*|backoff\\w*|on_exception|Retryable)\\b|\\b(?:import|from)\\s+(?:tenacity|backoff|retrying|retry)\\b|\\burllib3\\.util\\.retry\\b|\\b(?:retry|Retry|with_retries)\\w*\\s*\\(|\\b(?:for|while)\\b[^\\n]*?(?:(?:\\b|(?<=_))(?:attempts?|retr[a-z]*|tries|backoff)|(?<=[a-z])(?:Attempts?|Retr[a-z]*|Tries|Backoff))|(?:\\*\\*|<<)\\s*\\(?\\s*(?:\\w+[.])?(?:(?:\\b|(?<=_))(?:attempts?|retr[a-z]*|tries|backoff)|(?<=[a-z])(?:Attempts?|Retr[a-z]*|Tries|Backoff))|\\bpow\\s*\\(\\s*2\\s*,\\s*(?:\\w+[.])?(?:(?:\\b|(?<=_))(?:attempts?|retr[a-z]*|tries|backoff)|(?<=[a-z])(?:Attempts?|Retr[a-z]*|Tries|Backoff))|\\b(?:max_retries|maxRetries)\\s*[:=]\\s*[1-9]",
       "message": "Retry or backoff logic. Declare it as a critical path: what bounds the attempts?",
       "exclude": [
         "**/*.md",
@@ -215,7 +215,7 @@
       "category": "risky",
       "severity": "high",
       "on": "added",
-      "pattern": "except[^:]*:\\s*(?:pass|\\.\\.\\.)\\s*(?:#.*)?$|catch\\s*(?:\\([^)]*\\))?\\s*\\{\\s*\\}|if\\s+err\\s*!=\\s*nil\\s*\\{\\s*\\}|\\.catch\\(\\s*\\(\\s*\\w*\\s*\\)\\s*=>\\s*\\{\\s*\\}\\s*\\)",
+      "pattern": "(?m)except[^:\\n]*:\\s*(?:pass|\\.\\.\\.)\\s*(?:#.*)?$|catch\\s*(?:\\([^)]*\\))?\\s*\\{\\s*\\}|if\\s+err\\s*!=\\s*nil\\s*\\{\\s*\\}|\\.catch\\(\\s*\\(\\s*\\w*\\s*\\)\\s*=>\\s*\\{\\s*\\}\\s*\\)",
       "message": "Error silently swallowed.",
       "exclude": [
         "**/*.md",
@@ -224,7 +224,8 @@
         "**/LICENSE*",
         "**/*.json"
       ],
-      "code_only": true
+      "code_only": true,
+      "join_next": true
     },
     {
       "id": "todo",

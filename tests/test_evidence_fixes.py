@@ -354,5 +354,23 @@ class RuleTests(unittest.TestCase):
         files = diffparse.parse(patch)
         return {f["rule"] for f in rules.scan(rules.load(None), path, files[0].hunks)}
 
+    def test_retry_rule_wants_retry_logic_not_names(self):
+        for line in ("self.max_attempts = max_attempts", "self.backoff = backoff", "def __init__(self, retries=3):"):
+            self.assertNotIn("retry", self.fired(line), line)
+        for line in ("for attempt in range(self.max_attempts):", "@retry(stop=stop_after_attempt(3))",
+                     "while attempts < max_attempts:", "delay = base * 2 ** attempt", "import tenacity",
+                     "session.mount('https://', HTTPAdapter(max_retries=Retry(total=3)))"):
+            self.assertIn("retry", self.fired(line), line)
+
+    def test_two_line_swallowed_error(self):
+        from debrief import diffparse
+
+        path = "svc/x.py"
+        patch = (f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1,0 +1,4 @@\n"
+                 "+try:\n+    go()\n+except Exception:\n+    pass\n")
+        files = diffparse.parse(patch)
+        self.assertIn("swallowed-error", {f["rule"] for f in rules.scan(rules.load(None), path, files[0].hunks)})
+
+
 if __name__ == "__main__":
     unittest.main()
