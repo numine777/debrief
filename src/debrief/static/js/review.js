@@ -424,9 +424,10 @@
       const resp = await fetch("/api/v1/meta", { credentials: "same-origin" });
       if (!resp.ok) return;
       const meta = await resp.json();
-      if (generation === null) { generation = meta.generation; return; }
-      if (meta.generation !== generation) {
-        generation = meta.generation;
+      // Our own writes report the generation they produced (core.js keeps it), so they don't count as news.
+      if (D.knownGeneration === undefined || D.knownGeneration === null) { D.knownGeneration = meta.generation; return; }
+      if (meta.generation !== D.knownGeneration) {
+        D.knownGeneration = meta.generation;
         if (document.querySelector(".notice")) return;
         const note = h("div", { class: "notice", role: "status" }, "Records or evidence changed. ",
           h("button", { class: "btn small", type: "button", onclick: () => { note.remove(); D.invalidate(); D.rerender(); } }, "Show the latest"),

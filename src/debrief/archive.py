@@ -296,8 +296,10 @@ def sync(project_dir: Path, message: str = "Sync records", cfg: Optional[Config]
     with lock(project_dir):
         prune_conflicts(project_dir)
         committed = commit(project_dir, f"{message} from {util.hostname()}")
+    local = gitutil.head(project_dir)
     result = {"committed": committed}
     result.update(pull(project_dir, cfg, timeout))
+    result["incoming"] = gitutil.head(project_dir) != local
     if remote_url(project_dir):
         # A merge may have created a commit; push whatever we have now.
         result.update(push(project_dir, cfg, timeout))

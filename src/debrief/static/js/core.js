@@ -59,6 +59,9 @@
     const type = resp.headers.get("Content-Type") || "";
     const data = type.includes("json") ? await resp.json() : await resp.text();
     if (!resp.ok) throw new ApiError(resp.status, (data && data.error) || resp.statusText);
+    if (init.method !== "GET" && data && typeof data.generation === "number" && window.Debrief) {
+      window.Debrief.knownGeneration = data.generation;
+    }
     return data;
   }
 

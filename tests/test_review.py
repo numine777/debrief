@@ -212,6 +212,18 @@ class ReviewLoopTests(IsolatedTestCase):
         self.assertGreater(app.generation, before)
         self.append_journal(self.fdir, "finding", "New entry.")
         self.assertEqual(w.tick(), 1)
+        # The viewer's own comment write already counted itself; the watcher doesn't announce it again.
+        status, data = req(app, "POST", f"{self.base}/comments",
+                           {"anchor": self.anchor(3, "line 3"), "body": "Mine", "visibility": "shared"})
+        self.assertEqual(data["generation"], app.generation)
+        before = app.generation
+        w.tick()
+        self.assertEqual(app.generation, before)
+        # Re-ingesting unchanged evidence isn't news either.
+        w.dirty[self.pid] = True
+        w.last_dirty_check[self.pid] = 0
+        w.tick()
+        self.assertEqual(app.generation, before)
 
 
 class SyncAndServiceTests(IsolatedTestCase):

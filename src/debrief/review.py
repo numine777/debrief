@@ -127,8 +127,10 @@ class ReviewApp(App):
         found = comments.locate(comments.load_all(pid, fid, self.api.root, self.user_name(req)), feature_dir, evidence)
         return Response.json({"comments": found})
 
-    def _bump(self) -> None:
+    def _bump(self) -> int:
+        """Count a change; write responses carry the count so the writer's viewer doesn't report its own change."""
         self.generation += 1
+        return self.generation
 
     def post_comment(self, req: Request, pid: str, fid: str) -> Response:
         self.api.feature_dir(pid, fid)
@@ -139,8 +141,7 @@ class ReviewApp(App):
             raise BadRequest(str(exc)) from None
         if comment["visibility"] == "shared":
             publish_records(pid, f"Add a review comment on {fid}", self.api.root)
-        self._bump()
-        return Response.json({"comment": comment}, 201)
+        return Response.json({"comment": comment, "generation": self._bump()}, 201)
 
     def patch_comment(self, req: Request, pid: str, fid: str, cid: str) -> Response:
         self.api.feature_dir(pid, fid)
@@ -151,8 +152,7 @@ class ReviewApp(App):
             raise (NotFound if "no such" in str(exc) else BadRequest)(str(exc)) from None
         if shared or comment["visibility"] == "shared":
             publish_records(pid, f"Update a review comment on {fid}", self.api.root)
-        self._bump()
-        return Response.json({"comment": comment})
+        return Response.json({"comment": comment, "generation": self._bump()})
 
     def delete_comment(self, req: Request, pid: str, fid: str, cid: str) -> Response:
         self.api.feature_dir(pid, fid)
@@ -163,8 +163,7 @@ class ReviewApp(App):
             raise NotFound(str(exc)) from None
         if shared:
             publish_records(pid, f"Delete a review comment on {fid}", self.api.root)
-        self._bump()
-        return Response.json({"deleted": cid})
+        return Response.json({"deleted": cid, "generation": self._bump()})
 
     def post_prompt(self, req: Request, pid: str, fid: str) -> Response:
         feature_dir = self.api.feature_dir(pid, fid)
@@ -194,7 +193,7 @@ class ReviewApp(App):
         if changed:
             publish_records(pid, f"Queue review feedback for {fid}" if body.get("queue") else f"Send review comments on {fid}",
                             self.api.root)
-        self._bump()
+        result["generation"] = self._bump()
         return Response.json(result)
 
     def post_mark(self, req: Request, pid: str, fid: str) -> Response:
@@ -212,7 +211,7 @@ class ReviewApp(App):
         self.can_write(req, pid)
         result = request_close(pid, fid, self.user_name(req), req.json_body().get("note"), self.api.root)
         publish_records(pid, f"Request close of {result['leg_id']} of {fid}", self.api.root)
-        self._bump()
+        result["generation"] = self._bump()
         return Response.json(result)
 
     def get_export(self, req: Request, pid: str, fid: str) -> Response:
