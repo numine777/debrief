@@ -206,6 +206,31 @@ class KeepEvidenceTests(EvidenceFixture):
         patches = sorted(p.name for p in (self.fdir / "evidence").glob("*.patch"))
         self.assertEqual(patches, sorted({ev["patch"]} | {leg["patch"] for leg in ev["legs"] if leg["patch"]}))
 
+    def test_show_records_landings_only_on_the_default_branch(self):
+        self.publish()
+        feature_head = git(self.repo, "rev-parse", "feat/fix")
+        git(self.repo, "checkout", "-q", "-b", "throwaway", "main")
+        git(self.repo, "checkout", "-q", "feat/fix", "--", ".")
+        git(self.repo, "commit", "-q", "-m", "Same tree, never merged")
+        throwaway = git(self.repo, "rev-parse", "HEAD")
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD^{tree}"), git(self.repo, "rev-parse", f"{feature_head}^{{tree}}"))
+        self.assertEqual(squash.describe(throwaway, self.repo)["landed"], [])
+        self.assertFalse((self.fdir / "evidence" / "landed.json").exists())
+        out = self.run_cli("show", "deadbeef", cwd=self.repo)
+        self.assertIn("not in any Debrief feature", out)
+
+    def test_ingest_targets_are_checked(self):
+        self.publish()
+        self.run_cli("ingest", "--feature", "feat/fix")  # a branch name works as well as the feature id
+        self.assertEqual(self.last_code, 0)
+        self.run_cli("ingest", str(self.repo), "--feature", "nope")
+        self.assertEqual(self.last_code, 1)
+        self.run_cli("ingest", str(self.tmp / "missing"))
+        self.assertEqual(self.last_code, 1)
+        features = sorted(p.name for p in (self.archive / "projects" / self.pid / "features").iterdir())
+        self.assertEqual(features, ["feat--fix"])
+
+
 class AttributionTests(EvidenceFixture):
     def kinds(self, ev):
         return [(c["subject"], c["kind"]) for c in ev["commits"]]

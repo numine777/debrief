@@ -630,17 +630,6 @@ class FeatureIngest:
         entry["systems"] = sorted({c["by"] for h in hunks_out for c in h["claims"] if c["kind"] == "system"})
         return entry, file_flags, units
 
-    @staticmethod
-    def _coverage(units: List[dict]) -> dict:
-        counts = {"covered": 0, "incidental": 0, "weak": 0, "unclaimed": 0}
-        for unit in units:
-            counts[unit["state"]] += 1
-        total = len(units)
-        explained = counts["covered"] + counts["incidental"]
-        return dict(counts, units=total, ratio=(round(explained / total, 4) if total else None))
-
-    # --- tests -----------------------------------------------------------------------------------------
-
     def _block_evidence(self, fp: diffparse.FilePatch, block: diffparse.Block, new_anchors: List[dict],
                         old_anchors: List[dict], dir_anchors: List[dict], is_incidental, noise) -> dict:
         """Claims on one run of changed lines: anchors must reach a changed line, not just the hunk's context."""
@@ -1212,20 +1201,34 @@ def cli(args) -> int:
 
     root = paths.archive_root()
     targets: List[Tuple[str, Optional[str]]] = []
+    feature = util.feature_id_for_branch(args.feature) if args.feature and "/" in args.feature else args.feature
+    status = 0
     if args.project:
-        targets.append((args.project, args.feature))
+        if not paths.project_dir(args.project, root).is_dir():
+            print(f"No project {args.project} in {root}.")
+            return 1
+        targets.append((args.project, feature))
     elif args.repos:
         for repo in args.repos:
+            if not Path(repo).exists():
+                print(f"{repo}: no such directory")
+                status = 1
+                continue
             found = projects.find_project(Path(repo))
             if not found:
                 print(f"{repo}: not tracked (run `debrief init {repo}`)")
+                status = 1
                 continue
-            targets.append((found[0], args.feature))
+            targets.append((found[0], feature))
     else:
         for pid in projects.list_projects(root):
-            targets.append((pid, args.feature))
-    status = 0
+            targets.append((pid, feature))
     for pid, fid in targets:
+        if fid and not paths.feature_dir(pid, fid, root).is_dir():
+            if args.project or args.repos:
+                print(f"{pid}: no feature {fid}")
+                status = 1
+            continue
         fids = [fid] if fid else feature_ids(pid, root)
         for feature_id in fids:
             try:

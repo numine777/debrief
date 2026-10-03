@@ -114,9 +114,8 @@ def follow_default_branch(project_id: str, root: Optional[Path] = None, limit: i
 
 def describe(sha: str, repo: Optional[Path] = None, root: Optional[Path] = None) -> dict:
     """Everything Debrief knows about a commit."""
-    full = sha
-    if repo is not None:
-        full = gitutil.rev_parse(repo, sha) or sha
+    resolved = gitutil.rev_parse(repo, f"{sha}^{{commit}}") if repo is not None else None
+    full = resolved or sha
     rows = index.lookup_commit(full, root)
     result: Dict[str, object] = {"sha": full, "features": [], "landed": []}
     for row in rows:
@@ -125,7 +124,9 @@ def describe(sha: str, repo: Optional[Path] = None, root: Optional[Path] = None)
                                 / f"{row['sha']}.json", {}) or {}
         target.append(dict(row, systems=commit.get("systems", []), session_id=commit.get("session_id"),
                            subject=commit.get("subject") or row.get("subject"), body=commit.get("body", "")))
-    if not rows and repo is not None:
+    # Only a commit on the default branch can have landed a feature: an amended-away commit or a
+    # throwaway branch with the same tree is not a landing, and recording one would mislabel it.
+    if not rows and resolved and _on_default_branch(repo, resolved):
         found = projects.find_project(repo)
         if found:
             for match in match_commit(repo, full, found[0], root):
@@ -133,6 +134,10 @@ def describe(sha: str, repo: Optional[Path] = None, root: Optional[Path] = None)
                     record_landing(found[0], match["feature_id"], full, match, root)
                     result["landed"].append(dict(match, project_id=found[0], sha=full, match="landed"))
     return result
+
+
+def _on_default_branch(repo: Path, sha: str) -> bool:
+    return any(gitutil.is_ancestor(repo, sha, ref) for ref in gitutil.upstream_refs(repo, None))
 
 
 def cli_show(args) -> int:
