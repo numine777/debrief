@@ -415,7 +415,7 @@ table.grid td .tid { white-space: nowrap; }
 .card-head .seq { font-variant-numeric: tabular-nums; color: var(--ink-3); font-size: var(--s-18); font-weight: 600; min-width: 1.6rem; }
 .card-head h3 { margin: 0; font-size: var(--s-18); flex: 1 1 20rem; }
 .card-head .sha { font-family: var(--font-code); font-size: var(--s-12); color: var(--ink-3); text-decoration: none; }
-.trailers { font-family: var(--font-code); font-size: var(--s-12); color: var(--ink-3); margin: 0.4rem 0 0 2.3rem; }
+.trailers { font-family: var(--font-code); font-size: var(--s-12); color: var(--ink-3); margin: 0.4rem 0 0 2.3rem; overflow-wrap: anywhere; }
 .card.flush .card-body, .card.flush .card-meta, .card.flush .trailers { margin-left: 0; }
 .card-body { font-family: var(--font-prose); font-size: var(--s-16); line-height: 1.55; margin: 0.35rem 0 0 2.3rem; max-width: 72ch; color: var(--ink); }
 .card-body p { margin: 0 0 0.45em; }
@@ -653,7 +653,12 @@ kbd { font-family: var(--font-code); font-size: var(--s-12); border: 1px solid v
   .feature-head.compact .facts { display: none; }
   .feature-head.compact .legend > :not(.legend-total):not(.review-progress):not(.legend-alert) { display: none; }
   .mode-blurb { display: none; }
-  .diff-toolbar .jump { flex: 1 1 100%; }
+  /* min-width: a select is otherwise as wide as its longest option, a whole commit subject. */
+  .diff-toolbar .jump { flex: 1 1 100%; min-width: 0; }
+  .trailers { margin-left: 0; }
+  .notice { left: 0.6rem; right: 0.6rem; }
+  .toast { max-width: calc(100vw - 2rem); text-align: center; }
+  dialog { width: calc(100vw - 1.5rem); max-width: none; padding: 1rem; }
   /* Wide tables scroll inside themselves; the page never scrolls sideways. */
   table.grid { display: block; max-width: 100%; overflow-x: auto; }
   .feature-row { grid-template-columns: minmax(0, 1fr); gap: 0.3rem; }
@@ -695,7 +700,7 @@ kbd { font-family: var(--font-code); font-size: var(--s-12); border: 1px solid v
   .outline li a { padding: 0.55rem 0.4rem; }
   .target { padding-top: 0.7rem; padding-bottom: 0.7rem; }
   .map-card .deps li { padding: 0.3rem 0; }
-  .results .r-title { display: inline-block; padding: 0.35rem 0; }
+  .results .r-title, .card-head .sha, .tl .body a.mono, .map-card .title { display: inline-block; padding: 0.35rem 0; }
   .comment-item input[type="checkbox"] { width: 1.35rem; height: 1.35rem; }
 }
 /* Fields under 16 px make iOS zoom the page when they take focus. */

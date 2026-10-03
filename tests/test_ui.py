@@ -176,6 +176,25 @@ class ViewerSmokeTests(IsolatedTestCase):
 
 
 PHONE = {"viewport": {"width": 390, "height": 844}, "is_mobile": True, "has_touch": True, "device_scale_factor": 2}
+DROP_Y = "Drop y from util because nothing reads it any longer anywhere in the app"
+
+# Everything in main that sticks out past the right edge of the screen, other than inside something
+# that scrolls or clips within the screen. Code is skipped: a wrapped line's trailing spaces may hang.
+OFFSCREEN = """() => {
+  const vw = window.innerWidth, out = [];
+  for (const el of document.querySelectorAll("main *")) {
+    if (el.closest("td.src")) continue;
+    const r = el.getBoundingClientRect();
+    if (!r.width || r.right <= vw + 1) continue;
+    let held = false;
+    for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+      const o = getComputedStyle(p).overflowX;
+      if (o !== "visible" && p.getBoundingClientRect().right <= vw + 1) { held = true; break; }
+    }
+    if (!held) out.push(el.tagName.toLowerCase() + "." + (el.getAttribute("class") || ""));
+  }
+  return out;
+}"""
 
 PHONE_TESTS_YAML = """tests:
   - id: app-tests
@@ -203,7 +222,8 @@ class PhoneLayoutTests(IsolatedTestCase):
         self.run_session(repo, "start")
         long_line = "        answer = compute_the_answer(first_argument, second_argument, third_argument, fourth)\n"
         self.commit(repo, "Change main\n\nReturns one.", {"app.py": "def main():\n    if True:\n" + long_line + "        return 1\n" + tail})
-        self.commit(repo, "Drop y from util\n\nNothing reads it.", {"util.py": "x = 1\n"})
+        self.commit(repo, f"{DROP_Y}\n\nNothing reads it.\n\nReviewed-At: https://example.invalid/reviews/{'0123456789' * 6}",
+                    {"util.py": "x = 1\n"})
         self.run_session(repo, "now")
         self.write_records(fdir, tests_yaml=PHONE_TESTS_YAML)
         brief = (fdir / "brief.md").read_text()
@@ -234,6 +254,23 @@ class PhoneLayoutTests(IsolatedTestCase):
         page.goto(self.base + route)
         page.locator(wait).first.wait_for()
         return page
+
+    def test_nothing_runs_off_a_phone_screen(self):
+        sha = git(self.tmp / "repo", "rev-parse", "HEAD")
+        routes = ["#/", self.feature, self.feature + "/map", self.feature + "/systems", self.feature + "/system/app",
+                  self.feature + "/tests", self.feature + "/queue", self.feature + "/diff?mode=story",
+                  self.feature + "/diff?mode=systems", self.feature + "/timeline", self.feature + "/comments",
+                  f"#/commit/{sha}", "#/search?q=main"]
+        with sync_playwright() as p:
+            for width in (360, 390):
+                page = self.open(p, "#/", "main h1", viewport={"width": width, "height": 800})
+                for route in routes:
+                    page.goto(self.base + route)
+                    page.locator("main :is(h1, h3, .feature-head)").first.wait_for()
+                    page.wait_for_timeout(300)  # diffs and tab scrolling settle after the first paint
+                    self.assertLessEqual(page.evaluate("() => document.documentElement.scrollWidth"), width, route)
+                    self.assertEqual(page.evaluate(OFFSCREEN), [], f"{route} at {width} px")
+                self.assertEqual(page.errors, [])
 
     def test_code_rows_show_one_line_number_and_hang_wrapped_lines(self):
         with sync_playwright() as p:
@@ -345,7 +382,7 @@ class PhoneLayoutTests(IsolatedTestCase):
             page = self.open(p, self.feature + "/diff?mode=story", ".card.commit", viewport={"width": 390, "height": 420})
             self.assertFalse(page.locator(".outline").is_visible())
             jump = page.locator("select.jump")
-            self.assertEqual(jump.locator("option").all_inner_texts(), ["Jump to a commit", "1. Change main", "2. Drop y from util"])
+            self.assertEqual(jump.locator("option").all_inner_texts(), ["Jump to a commit", "1. Change main", "2. " + DROP_Y])
             jump.select_option(index=2)
             page.wait_for_timeout(200)
             card = page.locator(".card.commit", has_text="Drop y from util")
