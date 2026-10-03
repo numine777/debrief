@@ -149,6 +149,7 @@ class ServerTests(IsolatedTestCase):
                 return sock.recv(200)
 
         self.assertIn(b" 400 ", send(b"Content-Length: -1"))
+        self.assertIn(b"Content-Security-Policy", send(b"Content-Length: -1"))  # stdlib errors get our headers too
         self.assertIn(b" 400 ", send(b"Content-Length: abc"))
         self.assertIn(b" 400 ", send(b"Content-Length: \xb2"))  # superscript two: isdigit() but not a number
         self.assertIn(b" 411 ", send(b"Transfer-Encoding: chunked"))
@@ -156,6 +157,10 @@ class ServerTests(IsolatedTestCase):
 
     def test_odd_requests_get_clean_errors(self):
         self.assertEqual(get(self.app, "/static/%00").status, 404)
+        from debrief.api import BadRequest
+
+        with self.assertRaises(BadRequest):  # it used to escape as a RecursionError and a 500
+            Request("POST", "/x", {}, b"[" * 100000).json_body()
         self.assertEqual(get(self.app, "/static/js\\..\\app.js").status, 404)
         # An internal error names a log reference, never the exception.
         self.app.add("GET", r"/api/v1/boom", lambda req: 1 / 0)

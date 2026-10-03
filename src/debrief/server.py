@@ -81,6 +81,8 @@ class Request:
             data = json.loads(self.body.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
             raise BadRequest("request body is not valid JSON") from None
+        except RecursionError:  # absurdly deep nesting
+            raise BadRequest("request body is nested too deeply") from None
         if not isinstance(data, dict):
             raise BadRequest("request body must be a JSON object")
         return data
@@ -256,6 +258,25 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(resp.body)
 
     do_GET = do_POST = do_PATCH = do_DELETE = do_PUT = do_HEAD = _dispatch
+
+    def send_error(self, code: int, message: Optional[str] = None, explain: Optional[str] = None) -> None:
+        """Errors raised before routing (bad lengths, long URIs, unknown methods) get the same headers as
+        every other response, including the content security policy, and a JSON body."""
+        try:
+            short, _long = self.responses[code]
+        except KeyError:
+            short = "Error"
+        body = json.dumps({"error": message or short}).encode("utf-8")
+        self.close_connection = True
+        self.send_response(code, short)
+        for key, value in SECURITY_HEADERS.items():
+            self.send_header(key, value)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Connection", "close")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if getattr(self, "command", None) != "HEAD" and code >= 200 and code not in (204, 304):
+            self.wfile.write(body)
 
     def log_message(self, fmt: str, *args) -> None:
         if getattr(self.server, "verbose", False):
