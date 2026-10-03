@@ -375,28 +375,22 @@ class HubApp(ReviewApp):
         view["epics"] = epics
         return Response.json(view)
 
-    def route_commit(self, req: Request, sha: str) -> Response:
-        data = self.api.commit(sha)
+    def _allow(self, req: Request):
+        """A filter for Api views: only features in projects this user can read."""
         readable = set(self.hub.readable_projects(req.user))
-        data["features"] = [f for f in data["features"] if f["project_id"] in readable]
-        data["landed"] = [f for f in data["landed"] if f["project_id"] in readable]
-        if not data["features"] and not data["landed"]:
-            raise NotFound(f"no feature you can see contains {sha}")
-        return Response.json(data)
+        return lambda project_id, _feature_id: project_id in readable
+
+    def route_commit(self, req: Request, sha: str) -> Response:
+        try:
+            return Response.json(self.api.commit(sha, allow=self._allow(req)))
+        except NotFound:
+            raise NotFound(f"no feature you can see contains {sha}") from None
 
     def route_search(self, req: Request) -> Response:
-        data = self.api.search(req.query.get("q", ""))
-        readable = set(self.hub.readable_projects(req.user))
-        data["results"] = [r for r in data["results"] if r["project_id"] in readable]
-        return Response.json(data)
+        return Response.json(self.api.search(req.query.get("q", ""), allow=self._allow(req)))
 
     def route_epic(self, req: Request, name: str) -> Response:
-        data = self.api.epic(name)
-        readable = set(self.hub.readable_projects(req.user))
-        data["features"] = [f for f in data["features"] if f["project_id"] in readable]
-        if not data["features"]:
-            raise NotFound(f"no features in epic {name}")
-        return Response.json(data)
+        return Response.json(self.api.epic(name, allow=self._allow(req)))
 
     def post_ingest(self, req: Request, pid: str, fid: str) -> Response:
         """On the hub, Refresh pulls the project's archive instead of reading a repo."""

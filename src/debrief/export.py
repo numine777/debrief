@@ -19,7 +19,7 @@ from typing import Dict, Optional
 from urllib.parse import quote
 
 from . import __version__, comments, paths, projects, resources, util
-from .api import Api, NotFound
+from .api import Api, BadRequest, NotFound
 
 SCRIPTS = ["static/vendor/marked.min.js", "static/vendor/purify.min.js", "static/vendor/highlight.min.js",
            "static/js/core.js", "static/js/diff.js", "static/js/views.js", "static/js/review.js", "static/js/app.js"]
@@ -61,7 +61,16 @@ def script_safe(text: str) -> str:
 
 
 def collect(api: Api, pid: str, fid: str) -> dict:
-    """Every API response the viewer needs for one feature, keyed by path."""
+    """Every API response the viewer needs for one feature, keyed by path.
+
+    An export carries this feature's records and nothing else: commit and epic
+    pages are limited to it, so a file attached to a PR never includes another
+    feature or project that shares a commit or an epic name (on the hub, one
+    the exporter may not even be allowed to see).
+    """
+    def only_this(project_id: str, feature_id: str) -> bool:
+        return project_id == pid and feature_id == fid
+
     feature = api.feature(pid, fid)
     feature_dir = api.feature_dir(pid, fid)
     evidence = util.read_json(feature_dir / "evidence" / "evidence.json", {}) or {}
@@ -76,8 +85,9 @@ def collect(api: Api, pid: str, fid: str) -> dict:
     routes["/meta"] = meta
     index = api.index_view()
     for project in index["projects"]:
-        project["features"] = [f for f in project["features"] if f["project_id"] == pid and f["feature_id"] == fid]
+        project["features"] = [f for f in project["features"] if only_this(f["project_id"], f["feature_id"])]
     index["projects"] = [p for p in index["projects"] if p["features"]]
+    index["epics"] = {f["epic"]: 1 for p in index["projects"] for f in p["features"] if f.get("epic")}
     routes["/index"] = index
     routes[base] = feature
     routes[f"{base}/diff?scope=feature"] = api.diff(pid, fid, "feature")
@@ -102,12 +112,12 @@ def collect(api: Api, pid: str, fid: str) -> dict:
         except NotFound:
             continue
         try:
-            routes[f"/commits/{sha}"] = api.commit(sha)
-        except Exception:  # a commit page is optional in an export
+            routes[f"/commits/{sha}"] = api.commit(sha, allow=only_this)
+        except (NotFound, BadRequest):  # a commit page is optional in an export
             pass
     if feature.get("epic"):
         try:
-            routes[f"/epics/{_enc(feature['epic'])}"] = api.epic(feature["epic"])
+            routes[f"/epics/{_enc(feature['epic'])}"] = api.epic(feature["epic"], allow=only_this)
         except NotFound:
             pass
     return {"routes": routes, "blobs": blobs, "start": f"#/p/{_enc(pid)}/f/{_enc(fid)}",

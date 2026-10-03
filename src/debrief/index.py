@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from . import paths, records, util
 
@@ -205,13 +206,18 @@ def lookup_commit(sha_prefix: str, root: Optional[Path] = None) -> List[dict]:
         conn.close()
 
 
-def search(query: str, limit: int = 60, root: Optional[Path] = None) -> List[dict]:
+def search(query: str, limit: int = 60, root: Optional[Path] = None,
+           allow: Optional[Callable[[str, str], bool]] = None) -> List[dict]:
+    """Rank matches across records; ``allow`` filters inside the query, so the limit counts visible rows."""
     terms = [t.lower() for t in query.split() if t.strip()]
     if not terms:
         return []
     conn = connect(root)
     try:
         clause = " AND ".join(["(lower(s.title) LIKE ? OR lower(s.body) LIKE ? OR lower(s.ref) LIKE ?)"] * len(terms))
+        if allow is not None:
+            conn.create_function("debrief_allowed", 2, lambda pid, fid: 1 if allow(pid, fid) else 0)
+            clause += " AND debrief_allowed(s.project_id, s.feature_id)"
         params: List[str] = []
         for term in terms:
             like = f"%{term}%"

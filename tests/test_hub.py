@@ -114,6 +114,36 @@ class HubTests(IsolatedTestCase):
             call(self.app, "POST", "/api/v1/login", {"token": "dbh_bad"})
         self.assertEqual(call(self.app, "POST", "/api/v1/login", {"token": self.alice})[0].status, 429)
 
+    def test_exports_and_cross_references_stay_inside_readable_projects(self):
+        # Another project on the hub shares this feature's commit and epic; alice can't read it.
+        clone = paths.feature_dir(self.pid, "feat--hubbed", self.hub.archive_root)
+        brief = clone / "brief.md"
+        brief.write_text(brief.read_text().replace("title: Test feature\n", "title: Test feature\nepic: shared-epic\n"))
+        secret = paths.feature_dir("secret-fork", "feat--hubbed", self.hub.archive_root)
+        shutil.copytree(str(clone), str(secret))
+        (secret.parent.parent / "project.json").write_text('{"project_id": "secret-fork"}')
+        (secret / "brief.md").write_text((secret / "brief.md").read_text()
+                                         .replace("title: Test feature", "title: TOP-SECRET feature")
+                                         .replace("Test.", "TOP-SECRET-INTENT"))
+        for pid in (self.pid, "secret-fork"):
+            index.update_feature(pid, "feat--hubbed", root=self.hub.archive_root)
+        sha = json.loads((clone / "evidence" / "evidence.json").read_text())["commits"][0]["sha"]
+        alice = self.login(self.alice)
+        commit = call(self.app, "GET", f"/api/v1/commits/{sha}", cookie=alice)[1]
+        self.assertEqual([f["project_id"] for f in commit["features"]], [self.pid])
+        epic = call(self.app, "GET", "/api/v1/epics/shared-epic", cookie=alice)[1]
+        self.assertEqual([f["project_id"] for f in epic["features"]], [self.pid])
+        self.assertEqual(call(self.app, "GET", "/api/v1/search?q=TOP-SECRET", cookie=alice)[1]["results"], [])
+        resp, html = call(self.app, "GET", f"{self.base}/export", cookie=alice)
+        self.assertEqual(resp.status, 200)
+        self.assertNotIn(b"TOP-SECRET", html)
+        self.assertNotIn(b"secret-fork", html)
+        # An admin sees both projects live, but an export still carries only its own feature.
+        admin = self.login(self.hub.add_user("root", admin=True))
+        commit = call(self.app, "GET", f"/api/v1/commits/{sha}", cookie=admin)[1]
+        self.assertEqual(sorted(f["project_id"] for f in commit["features"]), sorted([self.pid, "secret-fork"]))
+        self.assertNotIn(b"TOP-SECRET", call(self.app, "GET", f"{self.base}/export", cookie=admin)[1])
+
     def test_roles_limit_what_people_see_and_change(self):
         carol = self.login(self.carol)
         idx = call(self.app, "GET", "/api/v1/index", cookie=carol)[1]

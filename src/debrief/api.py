@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from . import __version__, diffparse, index, paths, projects, records, util
+
+# allow(project_id, feature_id) -> whether a view may include that feature.
+Allow = Callable[[str, str], bool]
 
 
 class NotFound(Exception):
@@ -284,12 +287,18 @@ class Api:
             raise NotFound("that file version is not archived")
         return path.read_bytes()
 
-    def commit(self, sha: str) -> dict:
+    def commit(self, sha: str, allow: Optional[Allow] = None) -> dict:
+        """Every feature and landing a commit belongs to.
+
+        ``allow(project_id, feature_id)`` limits the result before any record
+        is read: the hub passes the projects a user may see, an export only
+        the exported feature.
+        """
         sha = sha.strip().lower()
         if len(sha) < 4 or not all(c in "0123456789abcdef" for c in sha):
             raise BadRequest("give at least 4 hex characters of a commit SHA")
         self._ensure_index()
-        rows = index.lookup_commit(sha, self.root)
+        rows = [r for r in index.lookup_commit(sha, self.root) if allow is None or allow(r["project_id"], r["feature_id"])]
         if not rows:
             raise NotFound(f"no feature contains a commit starting {sha}")
         features, landed = [], []
@@ -323,16 +332,18 @@ class Api:
         return {"sha": (features[0]["commit"]["sha"] if features else landed[0]["sha"]), "features": features,
                 "landed": landed}
 
-    def search(self, query: str) -> dict:
+    def search(self, query: str, allow: Optional[Allow] = None) -> dict:
         query = (query or "").strip()
         if not query:
             return {"query": query, "results": []}
         self._ensure_index()
-        return {"query": query, "results": index.search(query, root=self.root)}
+        results = index.search(query, root=self.root, allow=allow)
+        return {"query": query, "results": results}
 
-    def epic(self, name: str) -> dict:
+    def epic(self, name: str, allow: Optional[Allow] = None) -> dict:
         self._ensure_index()
-        rows = [r for r in index.list_features(self.root) if r.get("epic") == name]
+        rows = [r for r in index.list_features(self.root) if r.get("epic") == name
+                and (allow is None or allow(r["project_id"], r["feature_id"]))]
         if not rows:
             raise NotFound(f"no features in epic {name}")
         members = []
