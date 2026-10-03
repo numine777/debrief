@@ -53,8 +53,18 @@ def _read(path: Path) -> List[dict]:
     return []
 
 
-def _write(path: Path, comments: List[dict]) -> None:
-    util.write_json(path, {"comments": sorted(comments, key=lambda c: c.get("created_at") or "")})
+def _write(path: Path, comments: List[dict], deleted: Optional[dict] = None) -> None:
+    """Write the comments, keeping the file's tombstones (and adding one for a deletion)."""
+    existing = util.read_json(path, None)
+    tombstones = list(existing.get("deleted") or []) if isinstance(existing, dict) else []
+    live = {c.get("id") for c in comments}
+    tombstones = [t for t in tombstones if t.get("id") not in live]  # re-shared since
+    if deleted is not None:
+        tombstones.append(deleted)
+    data: dict = {"comments": sorted(comments, key=lambda c: c.get("created_at") or "")}
+    if tombstones:
+        data["deleted"] = tombstones
+    util.write_json(path, data)
 
 
 def load_all(project_id: str, feature_id: str, root: Optional[Path] = None, user: Optional[str] = None) -> List[dict]:
@@ -193,7 +203,8 @@ def update(project_id: str, feature_id: str, comment_id: str, data: dict, user: 
         item["updated_at"] = now
         if moving:
             items = [c for c in items if c.get("id") != comment_id]
-            _write(path, items)
+            # Unsharing removes it from the synced file; a tombstone keeps other hosts from restoring it.
+            _write(path, items, {"id": comment_id, "deleted_at": now, "deleted_by": user} if shared_before else None)
             other = shared_path(project_id, feature_id, root) if target_visibility == "shared" else private_path(
                 project_id, feature_id, root)
             others = _read(other)
@@ -213,8 +224,10 @@ def delete(project_id: str, feature_id: str, comment_id: str, user: str, root: O
             raise CommentError("no such comment") from None
         if item.get("author") not in (None, user):
             raise PermissionError("only the author can delete a comment")
-        _write(path, [c for c in items if c.get("id") != comment_id])
-        return path == shared_path(project_id, feature_id, root)
+        shared = path == shared_path(project_id, feature_id, root)
+        tombstone = {"id": comment_id, "deleted_at": util.now_iso(), "deleted_by": user} if shared else None
+        _write(path, [c for c in items if c.get("id") != comment_id], tombstone)
+        return shared
 
 
 # --- where a comment is now -----------------------------------------------------------

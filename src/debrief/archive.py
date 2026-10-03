@@ -130,16 +130,27 @@ def _merge_json_records(path: str, ours: Optional[bytes], theirs: Optional[bytes
         merged["created_at"] = min(x for x in (a.get("created_at"), b.get("created_at"), "9999") if x)
         return (json.dumps(merged, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
     if name == "comments.json" and isinstance(a, dict) and isinstance(b, dict):
+        # Deleted comments leave tombstones, so a merge with an older copy can't bring them back.
+        deleted: Dict[str, dict] = {}
+        for item in (a.get("deleted") or []) + (b.get("deleted") or []):
+            if isinstance(item, dict) and item.get("id"):
+                deleted.setdefault(item["id"], item)
         by_id: Dict[str, dict] = {}
         for item in (a.get("comments") or []) + (b.get("comments") or []):
             cid = item.get("id")
             if not cid:
                 continue
+            if cid in deleted:
+                if (item.get("updated_at") or "") <= (deleted[cid].get("deleted_at") or ""):
+                    continue
+                deleted.pop(cid)  # shared again after it was deleted or unshared
             prev = by_id.get(cid)
             if prev is None or (item.get("updated_at") or "") >= (prev.get("updated_at") or ""):
                 by_id[cid] = item
         merged = dict(a)
         merged["comments"] = sorted(by_id.values(), key=lambda c: c.get("created_at") or "")
+        if deleted:
+            merged["deleted"] = sorted(deleted.values(), key=lambda d: d.get("deleted_at") or "")
         return (json.dumps(merged, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
     if "/legs/" in "/" + path and isinstance(a, dict) and isinstance(b, dict):
         merged = dict(b)
@@ -159,6 +170,27 @@ def _merge_json_records(path: str, ours: Optional[bytes], theirs: Optional[bytes
     return None
 
 
+def _is_derived(rel: str) -> bool:
+    return "/evidence/" in "/" + rel
+
+
+def _pick_evidence(ours: Optional[bytes], theirs: Optional[bytes]) -> bytes:
+    """Of two versions of a derived file, keep the one computed from more of the code, then the newer."""
+    def rank(data: Optional[bytes]):
+        try:
+            doc = json.loads(data.decode("utf-8")) if data else None
+        except (ValueError, UnicodeDecodeError):
+            doc = None
+        if not isinstance(doc, dict):
+            return (data is not None, 0, "")
+        return (doc.get("repo_available") is not False, len(doc.get("commits") or []), doc.get("computed_at") or "")
+    if ours is None:
+        return theirs or b""
+    if theirs is None:
+        return ours
+    return theirs if rank(theirs) > rank(ours) else ours
+
+
 def _resolve_conflicts(project_dir: Path) -> List[str]:
     """Resolve an in-progress merge. Returns files kept in both versions."""
     conflicted = gitutil.run(["diff", "--name-only", "--diff-filter=U"], project_dir).split()
@@ -168,6 +200,11 @@ def _resolve_conflicts(project_dir: Path) -> List[str]:
         ours = gitutil.file_at(project_dir, ":2", rel)  # stage 2: our side of the merge
         theirs = gitutil.file_at(project_dir, ":3", rel)  # stage 3: the remote side
         target = project_dir / rel
+        if _is_derived(rel):
+            # Evidence is recomputed by ingest on any host with the code: never a conflict to review.
+            util.write_bytes(target, _pick_evidence(ours, theirs))
+            _git(project_dir, ["add", "-A", "--", rel])
+            continue
         merged = _merge_json_records(rel, ours, theirs) if rel.endswith(".json") else None
         if merged is not None:
             util.write_bytes(target, merged)
@@ -175,7 +212,9 @@ def _resolve_conflicts(project_dir: Path) -> List[str]:
             if ours is not None:
                 util.write_bytes(target, ours)
             if theirs is not None:
-                util.write_bytes(target.with_name(f"{target.name}.conflict-{stamp}"), theirs)
+                copy = target.with_name(f"{target.name}.conflict-{stamp}")
+                util.write_bytes(copy, theirs)
+                _git(project_dir, ["add", "--", str(copy.relative_to(project_dir))])
                 kept_both.append(rel)
         _git(project_dir, ["add", "-A", "--", rel])
     if kept_both:
@@ -250,14 +289,34 @@ def unpushed(project_dir: Path) -> bool:
     return count.strip() != "0"
 
 
-def sync(project_dir: Path, message: str = "Sync records", cfg: Optional[Config] = None) -> dict:
+def sync(project_dir: Path, message: str = "Sync records", cfg: Optional[Config] = None,
+         timeout: Optional[float] = None) -> dict:
     """Commit local changes, pull (merging), and push."""
     cfg = cfg or load_config()
     with lock(project_dir):
+        prune_conflicts(project_dir)
         committed = commit(project_dir, f"{message} from {util.hostname()}")
     result = {"committed": committed}
-    result.update(pull(project_dir, cfg))
+    result.update(pull(project_dir, cfg, timeout))
     if remote_url(project_dir):
         # A merge may have created a commit; push whatever we have now.
-        result.update(push(project_dir, cfg))
+        result.update(push(project_dir, cfg, timeout))
     return result
+
+
+def prune_conflicts(project_dir: Path) -> None:
+    """Forget conflicts the developer reconciled, which they signal by deleting the other version."""
+    record = Path(project_dir) / "conflicts.json"
+    data = util.read_json(record, None)
+    if not isinstance(data, dict) or not data.get("conflicts"):
+        return
+    live = []
+    for conflict in data["conflicts"]:
+        target = Path(project_dir) / str(conflict.get("path", ""))
+        if list(target.parent.glob(target.name + ".conflict-*")):
+            live.append(conflict)
+    if len(live) != len(data["conflicts"]):
+        if live:
+            util.write_json(record, {"conflicts": live})
+        else:
+            record.unlink()

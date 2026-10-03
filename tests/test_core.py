@@ -166,6 +166,54 @@ class ArchiveSyncTests(IsolatedTestCase):
         self.assertEqual(merged["created_at"], "2020-01-01T00:00:00Z")
         self.assertFalse(list(other.glob("project.json.conflict-*")))
 
+    def test_deleted_comments_stay_deleted_after_a_merge(self):
+        from debrief import comments
+
+        path = "features/f/comments.json"
+        c1 = {"id": "c-1", "body": "one", "created_at": "1", "updated_at": "1"}
+        c2 = {"id": "c-2", "body": "two", "created_at": "2", "updated_at": "2"}
+        util.write_json(self.a / path, {"comments": [c1, c2]})
+        archive.sync(self.a, "A")
+        archive.pull(self.b)
+        # B deletes c-2 while A replies to c-1.
+        comments._write(self.b / path, [c1], {"id": "c-2", "deleted_at": "3", "deleted_by": "b"})
+        archive.sync(self.b, "B deletes")
+        util.write_json(self.a / path, {"comments": [dict(c1, updated_at="4", replies=[{"body": "r"}]), c2]})
+        archive.sync(self.a, "A replies")
+        merged = json.loads((self.a / path).read_text())
+        self.assertEqual([c["id"] for c in merged["comments"]], ["c-1"])
+        self.assertEqual(merged["comments"][0]["replies"], [{"body": "r"}])
+
+    def test_evidence_conflicts_resolve_without_review(self):
+        path = "features/f/evidence/evidence.json"
+        util.write_json(self.a / path, {"computed_at": "1", "repo_available": True, "commits": [1]})
+        archive.sync(self.a, "A")
+        archive.pull(self.b)
+        util.write_json(self.a / path, {"computed_at": "2", "repo_available": True, "commits": [1, 2]})
+        archive.sync(self.a, "A2")
+        util.write_json(self.b / path, {"computed_at": "3", "repo_available": False, "commits": []})
+        result = archive.sync(self.b, "B")
+        self.assertEqual(result["conflicts"], [])
+        self.assertEqual(json.loads((self.b / path).read_text())["commits"], [1, 2])  # the fuller evidence wins
+        self.assertFalse((self.b / "conflicts.json").exists())
+
+    def test_conflict_copies_sync_and_reconciling_clears_the_flag(self):
+        path = self.a / "features" / "f" / "brief.md"
+        self.write(path, "base\n")
+        archive.sync(self.a, "A")
+        archive.pull(self.b)
+        self.write(path, "from a\n")
+        archive.sync(self.a, "A2")
+        self.write(self.b / "features" / "f" / "brief.md", "from b\n")
+        archive.sync(self.b, "B")
+        copy = next((self.b / "features" / "f").glob("brief.md.conflict-*"))
+        self.assertIn(copy.name, git(self.b, "ls-files", "features/f"))  # committed, so other hosts get it
+        archive.sync(self.a, "A gets the copy")
+        self.assertTrue(list((self.a / "features" / "f").glob("brief.md.conflict-*")))
+        copy.unlink()  # the developer reconciles the brief and removes the other version
+        archive.sync(self.b, "Reconciled")
+        self.assertFalse((self.b / "conflicts.json").exists())
+
     def test_network_calls_never_prompt(self):
         env = archive._network_env(self.a)
         self.assertIn("BatchMode=yes", env["GIT_SSH_COMMAND"])
