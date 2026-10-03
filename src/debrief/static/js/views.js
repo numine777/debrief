@@ -61,10 +61,20 @@
     };
   }
 
+  // Commit bodies are hard-wrapped at about 72 columns; reflow paragraphs so they
+  // read as prose, but keep lists and indented blocks line by line.
+  function reflow(text) {
+    return text.split(/\n\s*\n/).map((para) => {
+      const lines = para.split("\n");
+      const structured = lines.some((l) => /^\s*([-*+•]|\d+[.)])\s/.test(l) || /^\s{2,}\S/.test(l));
+      return { text: structured ? para : lines.map((l) => l.trim()).join(" "), structured };
+    });
+  }
+
   function messageBody(body) {
     if (!body) return null;
     const parts = D.splitTrailers(body);
-    return [parts.text ? h("div", { class: "card-body" }, parts.text) : null,
+    return [parts.text ? h("div", { class: "card-body" }, reflow(parts.text).map((p) => h("p", { class: p.structured ? "structured" : null }, p.text))) : null,
       parts.trailers.length ? h("div", { class: "trailers" }, parts.trailers.map((line) => h("div", null, line))) : null];
   }
 
