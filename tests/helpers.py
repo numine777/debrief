@@ -109,11 +109,13 @@ class IsolatedTestCase(unittest.TestCase):
         from debrief import session
 
         os.chdir(repo)
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = session.main(list(args))
         self.last_code = code
-        return out.getvalue()
+        self.last_stdout = out.getvalue()
+        # What an agent sees: stdout, then stderr (where `now` puts requests and logged commits).
+        return out.getvalue() + err.getvalue()
 
     def run_cli(self, *args: str, cwd: Optional[Path] = None) -> str:
         from debrief import cli

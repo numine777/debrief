@@ -192,6 +192,30 @@ class SessionFlowTests(SessionFixture):
 class ProtocolFixTests(SessionFixture):
     """The protocol issues the independent QA pass found."""
 
+    def test_now_prints_only_the_stamp_on_stdout(self):
+        self.run_session(self.repo, "start")
+        self.write(self.fdir / "feedback.md", "## 2026-10-02T20:00:00Z · dev\n\n1. app.py:1\n   Fix it.\n")
+        self.commit(self.repo, "Agent change\n\nBody.", {"app.py": "x = 1\n"})
+        out = self.run_session(self.repo, "now")
+        self.assertEqual(self.last_stdout.strip().count("\n"), 0)  # TS=$(bin/session now) gets just the time
+        self.assertIsNotNone(util.parse_iso(self.last_stdout.strip()))
+        self.assertIn("FEEDBACK: 1 new review item", out)
+        self.assertIn("Logged 1 commit", out)
+
+    def test_now_survives_a_reader_that_stops_early(self):
+        import os
+        import subprocess
+        import sys
+
+        from tests.helpers import SRC
+
+        self.run_session(self.repo, "start")
+        env = dict(os.environ, PYTHONPATH=str(SRC))
+        proc = subprocess.run(f"{sys.executable} -m debrief session now | head -c 1", shell=True, cwd=str(self.repo),
+                              env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertNotIn("BrokenPipe", proc.stderr)
+
     def test_detached_head_keeps_its_session(self):
         git(self.repo, "checkout", "-q", "--detach")
         self.run_session(self.repo, "start")
@@ -202,6 +226,11 @@ class ProtocolFixTests(SessionFixture):
         features = [p.name for p in (self.archive / "projects" / self.pid / "features").iterdir()]
         self.assertEqual(len([f for f in features if f.startswith("detached-")]), 1, features)
 
+    def test_now_without_a_session_writes_nothing(self):
+        out = self.run_session(self.repo, "now")
+        self.assertIn("No open Debrief session", out)
+        self.assertFalse((self.archive / "projects" / self.pid / "features").exists())
+
     def test_branches_that_slug_alike_get_separate_features(self):
         git(self.repo, "checkout", "-q", "-b", "feat/a+b")
         self.run_session(self.repo, "start")
@@ -211,6 +240,15 @@ class ProtocolFixTests(SessionFixture):
         features = sorted(p.name for p in (self.archive / "projects" / self.pid / "features").iterdir())
         self.assertEqual(len(features), 2, features)
         self.assertIn(f"feature  {features[1]} (branch feat/a@b)", out)
+
+    def test_launcher_under_home_is_written_with_a_tilde(self):
+        import os
+
+        from debrief import install
+
+        os.environ["DEBRIEF_BIN_DIR"] = str(self.home / ".local" / "bin")
+        self.assertEqual(install.session_launcher_text(), "~/.local/bin/debrief-session")
+
 
 if __name__ == "__main__":
     unittest.main()

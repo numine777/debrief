@@ -262,6 +262,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     except KeyboardInterrupt:
         return 130
     except BrokenPipeError:
+        from .session import quiet_stdout
+
+        quiet_stdout()
         return 0
 
 

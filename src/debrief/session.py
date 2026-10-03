@@ -546,13 +546,13 @@ def cmd_context(ctx: Context, args) -> int:
         print(
             f"Debrief session {sid} is open for feature {ctx.feature_id} ({meta.get('leg_id')}). "
             f"Keep appending to {session_dir(ctx, sid) / 'journal.md'}; get heading times from "
-            f"`debrief-session now`."
+            f"`{launcher()} now`."
         )
     else:
         state = f"{leg['leg_id']} open" if leg else "no open leg"
         print(
             f"Debrief tracks this repo (feature {ctx.feature_id}, {state}). Before your first edit on a task "
-            f"that changes behavior, run `debrief-session start` and follow {skills_dir() / SESSION_SKILL}."
+            f"that changes behavior, run `{launcher()} start` and follow {skills_dir() / SESSION_SKILL}."
         )
     for note in notes:
         print(note)
@@ -560,8 +560,16 @@ def cmd_context(ctx: Context, args) -> int:
 
 
 def cmd_now(ctx: Context, args) -> int:
+    """Print the journal time stamp on stdout, and everything else on stderr.
+
+    Agents often capture the stamp (``TS=$(debrief-session now)``); requests
+    and feedback go to stderr so they are never swallowed by that capture.
+    """
     stamp = util.now_minute()
-    print(stamp)
+    print(stamp, flush=True)
+    if not ctx.feature_dir.exists():
+        _say(f"No open Debrief session in this worktree; run `{launcher()} start` first.")
+        return 0
     pull_note = _maybe_pull(ctx)
     sid, meta = _resolve_session(ctx)
     with ctx.lock():
@@ -575,14 +583,25 @@ def cmd_now(ctx: Context, args) -> int:
         if leg:
             save_leg(ctx, leg)
     if not meta:
-        print("No open Debrief session in this worktree; run `debrief-session start` first.")
+        _say(f"No open Debrief session in this worktree; run `{launcher()} start` first.")
     if logged:
-        print("Logged " + util.human_count(len(logged), "commit") + ": " + ", ".join(c["sha"][:7] for c in logged))
+        _say("Logged " + util.human_count(len(logged), "commit") + ": " + ", ".join(c["sha"][:7] for c in logged))
     if pull_note:
-        print(f"Note: {pull_note}")
+        _say(f"Note: {pull_note}")
     for note in notes:
-        print(note)
+        _say(note)
     return 0
+
+
+def _say(text: str) -> None:
+    print(text, file=sys.stderr, flush=True)
+
+
+def launcher() -> str:
+    """How agents should call this tool: the installed launcher's path, written the way install wrote it."""
+    from . import install
+
+    return install.session_launcher_text()
 
 
 def cmd_run(ctx: Optional[Context], args) -> int:
@@ -893,6 +912,24 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    try:
+        return _main(argv)
+    except BrokenPipeError:
+        # The reader stopped early (`| head`); state is already saved, so just stop quietly.
+        quiet_stdout()
+        return 0
+
+
+def quiet_stdout() -> None:
+    """Point stdout at /dev/null so the interpreter's final flush can't fail on a closed pipe."""
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+def _main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if not args.cmd:
