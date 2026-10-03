@@ -21,6 +21,7 @@ Layout of the hub directory::
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import hmac
 import os
@@ -33,7 +34,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Iterator, List, Optional
 
 from . import __version__, archive, gitutil, index, paths, util
 from .api import Api, BadRequest, NotFound
@@ -44,6 +45,10 @@ ROLES = ("reader", "reviewer", "owner")
 SESSION_SECONDS = 12 * 3600
 COOKIE = "debrief_session"
 DEFAULT_PORT = 7320
+LAST_USED_RESOLUTION = 3600
+FAILURE_WINDOW = 600
+FAILURE_LIMIT = 10
+LOOPBACK_NAMES = ("localhost", "127.0.0.1", "[::1]")
 
 
 def hub_dir(value: Optional[str] = None) -> Path:
@@ -75,6 +80,14 @@ class Hub:
             os.chmod(self.root / name, 0o600)
         except OSError:
             pass
+
+    @contextlib.contextmanager
+    def _editing(self, name: str, default: dict) -> Iterator[dict]:
+        """Read-modify-write one hub file under a lock shared by the server and the admin CLI."""
+        with self.lock, util.file_lock(self.root / ".hub.lock"):
+            data = self._read(name, default)
+            yield data
+            self._write(name, data)
 
     @property
     def config(self) -> dict:
@@ -122,50 +135,64 @@ class Hub:
     def add_user(self, name: str, admin: bool = False) -> str:
         if not name or not name.replace("-", "").replace("_", "").replace(".", "").isalnum():
             raise BadRequest("user names use letters, digits, '.', '-' and '_'")
-        with self.lock:
-            data = self._read("users.json", {"users": {}})
+        with self._editing("users.json", {"users": {}}) as data:
             if name in data["users"]:
                 raise BadRequest(f"{name} already exists; use `debrief hub token {name}` for a new token")
             data["users"][name] = {"created_at": util.now_iso(), "admin": bool(admin), "tokens": []}
-            self._write("users.json", data)
         return self.new_token(name, "initial")
 
     def new_token(self, name: str, label: str = "") -> str:
         token = "dbh_" + base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii").rstrip("=")
-        with self.lock:
-            data = self._read("users.json", {"users": {}})
+        with self._editing("users.json", {"users": {}}) as data:
             user = data["users"].get(name)
             if user is None:
                 raise NotFound(f"no user {name}")
             user["tokens"].append({"id": secrets.token_hex(4), "hash": self._hash(token), "label": label,
                                    "created_at": util.now_iso(), "last_used": None})
-            self._write("users.json", data)
         return token
 
     def revoke_tokens(self, name: str) -> int:
-        with self.lock:
-            data = self._read("users.json", {"users": {}})
+        with self._editing("users.json", {"users": {}}) as data:
             user = data["users"].get(name)
             if user is None:
                 raise NotFound(f"no user {name}")
             count = len(user["tokens"])
             user["tokens"] = []
-            self._write("users.json", data)
         return count
 
     def authenticate(self, token: str) -> Optional[dict]:
-        if not token or not token.startswith("dbh_"):
+        """The user a token belongs to, as {name, admin, token_id}, or None.
+
+        Authentication only reads users.json. ``last_used`` is stamped at most
+        once an hour per token, under the lock, so request traffic can't race
+        an admin's ``token``/``revoke`` and undo it.
+        """
+        if not isinstance(token, str) or not token.startswith("dbh_"):
             return None
         digest = self._hash(token)
-        with self.lock:
-            data = self._read("users.json", {"users": {}})
-            for name, user in data["users"].items():
-                for entry in user.get("tokens", []):
-                    if hmac.compare_digest(entry["hash"], digest):
-                        entry["last_used"] = util.now_iso()
-                        self._write("users.json", data)
-                        return {"name": name, "admin": bool(user.get("admin"))}
+        data = self._read("users.json", {"users": {}})
+        for name, user in data["users"].items():
+            for entry in user.get("tokens", []):
+                if hmac.compare_digest(entry.get("hash", ""), digest):
+                    self._stamp_last_used(name, entry)
+                    return {"name": name, "admin": bool(user.get("admin")), "token_id": entry.get("id")}
         return None
+
+    def _stamp_last_used(self, name: str, entry: dict) -> None:
+        last = util.parse_iso(entry.get("last_used"))
+        if last is not None and (util.utcnow() - last).total_seconds() < LAST_USED_RESOLUTION:
+            return
+        with self._editing("users.json", {"users": {}}) as data:
+            for current in (data["users"].get(name) or {}).get("tokens", []):
+                if current.get("id") == entry.get("id"):
+                    current["last_used"] = util.now_iso()
+
+    def session_user(self, name: str, token_id: Optional[str]) -> Optional[dict]:
+        """The current user for a signed-in session, or None once its token is revoked."""
+        user = self.users().get(name)
+        if user is None or not any(t.get("id") == token_id for t in user.get("tokens", [])):
+            return None
+        return {"name": name, "admin": bool(user.get("admin")), "token_id": token_id}
 
     def users(self) -> Dict[str, dict]:
         return self._read("users.json", {"users": {}})["users"]
@@ -177,17 +204,13 @@ class Hub:
             raise BadRequest(f"role must be one of {', '.join(ROLES)}")
         if user not in self.users():
             raise NotFound(f"no user {user}")
-        with self.lock:
-            data = self._read("projects.json", {"projects": {}})
+        with self._editing("projects.json", {"projects": {}}) as data:
             data["projects"].setdefault(project_id, {"members": {}})["members"][user] = role
-            self._write("projects.json", data)
 
     def revoke(self, user: str, project_id: str) -> bool:
-        with self.lock:
-            data = self._read("projects.json", {"projects": {}})
+        with self._editing("projects.json", {"projects": {}}) as data:
             members = data["projects"].get(project_id, {}).get("members", {})
             found = members.pop(user, None) is not None
-            self._write("projects.json", data)
         return found
 
     def role(self, user: Optional[dict], project_id: str) -> Optional[str]:

@@ -114,6 +114,29 @@ class HubTests(IsolatedTestCase):
             call(self.app, "POST", "/api/v1/login", {"token": "dbh_bad"})
         self.assertEqual(call(self.app, "POST", "/api/v1/login", {"token": self.alice})[0].status, 429)
 
+    def test_admin_writes_survive_concurrent_sign_ins(self):
+        # Force a last_used stamp on every authentication, the worst case for lost updates.
+        script = ("import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path; from debrief.hub import Hub\n"
+                  "hub = Hub(Path(sys.argv[2]))\nfor i in range(15): hub.new_token('alice', f'cli-{i}')\n")
+        stop = threading.Event()
+
+        def sign_in():
+            while not stop.is_set():
+                self.hub.authenticate(self.alice)
+
+        with mock.patch("debrief.hub.LAST_USED_RESOLUTION", -1):
+            workers = [threading.Thread(target=sign_in) for _ in range(3)]
+            for w in workers:
+                w.start()
+            try:
+                subprocess.run([sys.executable, "-c", script, str(ROOT / "src"), str(self.hub.root)], check=True,
+                               timeout=120)
+            finally:
+                stop.set()
+                for w in workers:
+                    w.join()
+        self.assertEqual(len(self.hub.users()["alice"]["tokens"]), 16)
+
     def test_comment_permissions(self):
         self.hub.grant("bob", self.pid, "reviewer")
         alice, bob = self.login(self.alice), self.login(self.bob)
