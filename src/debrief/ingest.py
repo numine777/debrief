@@ -1223,6 +1223,10 @@ def cli(args) -> int:
     else:
         for pid in projects.list_projects(root):
             targets.append((pid, feature))
+    if feature and not args.project and not args.repos and not any(
+            paths.feature_dir(pid, feature, root).is_dir() for pid, _ in targets):
+        print(f"No project has a feature {feature}.")
+        return 1
     for pid, fid in targets:
         if fid and not paths.feature_dir(pid, fid, root).is_dir():
             if args.project or args.repos:

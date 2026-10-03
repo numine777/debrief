@@ -112,6 +112,7 @@ class ProjectTests(IsolatedTestCase):
         self.assertEqual(projects.redact_remote("ssh://git@host/x.git"), "ssh://git@host/x.git")
         self.assertEqual(projects.redact_remote("ssh://git:pw@host/x.git"), "ssh://host/x.git")
         self.assertEqual(projects.redact_remote("git@host:x.git"), "git@host:x.git")
+        self.assertEqual(projects.redact_remote("https://host/x.git?token=abc"), "https://host/x.git")
 
     def test_repo_without_remote_gets_path_id(self):
         repo = self.make_repo("my-service")

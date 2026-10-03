@@ -227,6 +227,8 @@ class KeepEvidenceTests(EvidenceFixture):
         self.assertEqual(self.last_code, 1)
         self.run_cli("ingest", str(self.tmp / "missing"))
         self.assertEqual(self.last_code, 1)
+        self.assertIn("No project has a feature nope", self.run_cli("ingest", "--feature", "nope"))
+        self.assertEqual(self.last_code, 1)
         features = sorted(p.name for p in (self.archive / "projects" / self.pid / "features").iterdir())
         self.assertEqual(features, ["feat--fix"])
 

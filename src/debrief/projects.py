@@ -58,14 +58,16 @@ def redact_remote(url: Optional[str]) -> Optional[str]:
         parts = urlsplit(url)
     except ValueError:
         return url
-    if not parts.scheme or "@" not in parts.netloc:
+    if not parts.scheme:
         return url  # scp-like user@host:path carries a user name, never a secret
+    if "@" not in parts.netloc:
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, "", "")) if parts.scheme in ("http", "https") else url
     userinfo, _, hostport = parts.netloc.rpartition("@")
     user, has_password, _ = userinfo.partition(":")
     if parts.scheme in ("http", "https"):
-        netloc = hostport  # an HTTPS user name is often a token itself
-    else:
-        netloc = f"{user}@{hostport}" if user and not has_password else hostport
+        # An HTTPS user name is often a token itself, and so is a query string.
+        return urlunsplit((parts.scheme, hostport, parts.path, "", ""))
+    netloc = f"{user}@{hostport}" if user and not has_password else hostport
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
