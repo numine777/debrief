@@ -110,6 +110,10 @@ class JournalTests(unittest.TestCase):
         entries, issues = records.parse_journal(text)
         self.assertEqual(len(entries), 1)
         self.assertEqual([i["message"].split(":")[0] for i in issues], ["line 4", "line 7", "line 10"])
+        _, issues = records.parse_journal("### 2026-10-02T19:41Z · plan\nx\n## 2026-10-02T19:50Z · handoff\ny\n"
+                                          "#### 2026-10-02T19:55Z · finding\nz\n## Notes\n")
+        self.assertEqual([i["message"] for i in issues], ["line 3: journal entries use `###` headings",
+                                                         "line 5: journal entries use `###` headings"])
 
     def test_ascii_separator(self):
         entries, issues = records.parse_journal("### 2026-10-02T19:41Z - decision\nx\n")

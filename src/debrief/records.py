@@ -514,6 +514,8 @@ def load_decision(path: Path, feature_dir: Path) -> dict:
 
 
 _ENTRY_RE = re.compile(r"^###[ \t]+(\S+)[ \t]*(?:·|•|-|—|–|\|)[ \t]*([A-Za-z_-]+)[ \t]*$")
+# An entry heading at another level (## or ####) would silently become text of the previous entry.
+_LEVEL_RE = re.compile(r"^(?:#{1,2}|#{4,6})[ \t]+(\S+)[ \t]*(?:·|•|-|—|–|\|)[ \t]*[A-Za-z_-]+[ \t]*$")
 
 
 def parse_journal(text: str, rel: str = "journal.md") -> Tuple[List[dict], List[dict]]:
@@ -538,6 +540,10 @@ def parse_journal(text: str, rel: str = "journal.md") -> Tuple[List[dict], List[
             if line.startswith("###") and not line.startswith("####"):
                 # Not an entry heading: kept as text, but say so instead of silently merging entries.
                 issues.append(issue("warning", rel, f"line {number}: heading is not `### <time> · <kind>`"))
+            else:
+                level = _LEVEL_RE.match(line)
+                if level and util.parse_iso(level.group(1)):
+                    issues.append(issue("warning", rel, f"line {number}: journal entries use `###` headings"))
             if current is not None:
                 lines.append(line)
     if current is not None:

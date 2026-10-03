@@ -12,8 +12,8 @@ fields are in `ai-session/reference.md`; templates are in `ai-session/templates/
 
 0. **Open a session.** Unless a session is already open in this conversation
    (you ran `bin/session start` and haven't closed it), run
-   `bin/session start --task "Close out the leg"`. The closeout's commits, test
-   runs and handoff belong to it.
+   `bin/session start --task "Close out the leg"` and open its journal with a
+   `plan` entry. The closeout's commits, test runs and handoff belong to it.
 
 1. **Commit the code.** Run `bin/session changed`. Commit any uncommitted code
    atomically, one logical change per commit (see the ai-session skill).
