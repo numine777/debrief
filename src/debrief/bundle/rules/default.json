@@ -215,8 +215,8 @@
       "category": "risky",
       "severity": "high",
       "on": "added",
-      "pattern": "(?m)except[^:\\n]*:\\s*(?:pass|\\.\\.\\.)\\s*(?:#.*)?$|catch\\s*(?:\\([^)]*\\))?\\s*\\{\\s*\\}|if\\s+err\\s*!=\\s*nil\\s*\\{\\s*\\}|\\.catch\\(\\s*\\(\\s*\\w*\\s*\\)\\s*=>\\s*\\{\\s*\\}\\s*\\)",
-      "message": "Error silently swallowed.",
+      "pattern": "(?m)except\\s*(?:\\(?\\s*(?:Exception|BaseException)\\b[^:\\n]*)?:\\s*(?:pass|\\.\\.\\.)\\s*(?:#.*)?$|catch\\s*(?:\\([^)]*\\))?\\s*\\{\\s*\\}|if\\s+err\\s*!=\\s*nil\\s*\\{\\s*\\}|\\.catch\\(\\s*\\(\\s*\\w*\\s*\\)\\s*=>\\s*\\{\\s*\\}\\s*\\)",
+      "message": "Error silently swallowed: a broad except or an empty catch that drops every failure.",
       "exclude": [
         "**/*.md",
         "**/*.txt",

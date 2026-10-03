@@ -130,6 +130,10 @@ class CoverageTests(EvidenceFixture):
         ev = self.evidence()
         files = {f["path"]: f for f in ev["files"]}
         self.assertEqual((files["new_name.py"]["noise"], files["tool.sh"]["noise"]), ("rename", "mode"))
+        self.commit(self.repo, "Add a package marker\n\nEmpty.", {"pkg/__init__.py": ""})
+        self.run_session(self.repo, "now")
+        files = {f["path"]: f for f in self.evidence()["files"]}
+        self.assertEqual(files["pkg/__init__.py"]["noise"], "empty")  # not a mode change
         self.assertEqual(ev["coverage"]["unclaimed"], 0)
 
     def test_ambiguous_symbol_is_reported(self):
@@ -388,6 +392,15 @@ class RuleTests(unittest.TestCase):
                      "while attempts < max_attempts:", "delay = base * 2 ** attempt", "import tenacity",
                      "session.mount('https://', HTTPAdapter(max_retries=Retry(total=3)))"):
             self.assertIn("retry", self.fired(line), line)
+
+    def test_narrow_excepts_are_not_swallowed_errors(self):
+        from debrief import diffparse
+
+        path = "svc/x.py"
+        patch = (f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1,0 +1,4 @@\n"
+                 "+try:\n+    os.chmod(p, 0o600)\n+except OSError:\n+    pass\n")
+        files = diffparse.parse(patch)
+        self.assertNotIn("swallowed-error", {f["rule"] for f in rules.scan(rules.load(None), path, files[0].hunks)})
 
     def test_two_line_swallowed_error(self):
         from debrief import diffparse

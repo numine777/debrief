@@ -559,8 +559,13 @@ class FeatureIngest:
         path = fp.path
         noise = diffparse.classify_noise(path)
         if not fp.hunks and not fp.binary:
-            # Renamed or copied without edits, or only the mode changed: nothing to explain.
-            noise = noise or ("rename" if fp.status in ("R", "C") else "mode" if fp.old_mode != fp.new_mode else None)
+            # Renamed or copied without edits, only the mode changed, or an empty file: nothing to explain.
+            if fp.status in ("R", "C"):
+                noise = noise or "rename"
+            elif fp.status == "M" and fp.old_mode != fp.new_mode:
+                noise = noise or "mode"
+            elif fp.status in ("A", "D"):
+                noise = noise or "empty"
         is_incidental = records.is_incidental(path, incidental) or (fp.old_path and records.is_incidental(fp.old_path, incidental))
         new_anchors = [a for a in anchors if a["side"] == "new" and a["path"] == path]
         old_anchors = [a for a in anchors if a["side"] == "old" and fp.old_path and a["path"] == fp.old_path]
