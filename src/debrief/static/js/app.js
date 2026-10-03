@@ -217,7 +217,9 @@
       h("button", { class: "iconbtn", type: "button", title: "Keyboard shortcuts (?)", "aria-label": "Keyboard shortcuts", onclick: showHelp }, D.icon("help")));
     main = h("main", { id: "main", tabindex: "-1" });
     clear(app);
-    app.appendChild(h("a", { class: "visually-hidden", href: "#main" }, "Skip to content"));
+    // Not a hash link: the router owns the hash, and "#main" would be read as a page.
+    app.appendChild(h("a", { class: "skip-link", href: "#", onclick: (evt) => { evt.preventDefault(); main.focus(); } },
+      "Skip to content"));
     app.appendChild(top);
     app.appendChild(main);
   }

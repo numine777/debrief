@@ -366,7 +366,7 @@
     const edges = [];
     for (const s of systems) for (const dep of s.depends_on || []) if (known.has(dep.system) && dep.system !== s.id) edges.push({ from: s.id, to: dep.system, label: dep.relation || "" });
     const layers = layout(nodes, edges);
-    const W = 228, H = 70, GX = 44, GY = 92, PAD = 24;
+    const W = 228, H = 84, GX = 44, GY = 92, PAD = 24;
     const widest = Math.max(1, ...layers.map((r) => r.length));
     const width = PAD * 2 + widest * W + (widest - 1) * GX;
     const height = PAD * 2 + layers.length * H + Math.max(0, layers.length - 1) * GY;
@@ -412,14 +412,18 @@
       const s = n.data;
       const title = n.title.length > 30 ? n.title.slice(0, 29) + "…" : n.title;
       const cps = (s.critical_paths || []).length;
-      const meta = [n.change || "", s.hunk_count !== undefined ? plural(s.hunk_count, "hunk") : null, cps ? plural(cps, "critical path") : null].filter(Boolean).join("  ");
+      // Short lines that fit the node (about 30 characters of 11px mono): the change and size, then critical paths.
+      const meta = [n.change || "", s.hunk_count !== undefined ? plural(s.hunk_count, "hunk") : null].filter(Boolean).join(", ");
+      const cpText = cps ? plural(cps, "critical path") : "";
+      const fit = (text) => (text.length > 30 ? text.slice(0, 29) + "…" : text);
       const g = h("g", { class: ["map-node", "change-" + (n.change || "touched")], tabindex: "0", role: "link",
         "aria-label": `${n.title}, ${n.change || "touched"}`, transform: `translate(${p.x},${p.y})` },
         h("title", null, `${n.title} (${n.id})`),
         h("rect", { class: "frame", width: W, height: H, rx: 2 }),
         h("text", { class: "title", x: 12, y: 26 }, title),
-        h("text", { class: "meta", x: 12, y: 46 }, n.id.length > 32 ? n.id.slice(0, 31) + "…" : n.id),
-        h("text", { class: "meta", x: 12, y: 61 }, meta));
+        h("text", { class: "meta", x: 12, y: 44 }, fit(n.id)),
+        h("text", { class: "meta", x: 12, y: 59 }, fit(meta)),
+        cpText ? h("text", { class: "meta", x: 12, y: 74 }, fit(cpText)) : null);
       const go = () => { if (opts.onPick) opts.onPick(n.id); };
       g.addEventListener("click", go);
       g.addEventListener("keydown", (evt) => { if (evt.key === "Enter") go(); });
@@ -616,7 +620,7 @@
           const last = (ev.runs || [])[ev.runs ? ev.runs.length - 1 : 0];
           return h("tr", null,
             h("td", null, D.testBadge(ev.status || "not_run"), t.claimed_result && ev.status !== "verified_" + (t.claimed_result === "pass" ? "pass" : "fail")
-              ? h("div", { class: "small muted" }, `claimed ${t.claimed_result.replace("_", " ")}`) : null),
+              ? h("div", { class: "small muted" }, `claimed ${String(t.claimed_result).replace("_", " ")}`) : null),
             h("td", null, h("span", { class: "mono small tid" }, t.id), h("div", { class: "small muted" }, t.kind || "")),
             h("td", { class: "claim" }, t.claim),
             h("td", null, h("div", { class: "chips" }, t.validates.map(targetLink))),

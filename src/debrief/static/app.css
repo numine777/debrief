@@ -560,6 +560,13 @@ kbd { font-family: var(--font-code); font-size: var(--s-12); border: 1px solid v
 }
 @media (max-width: 640px) {
   :root { --gutter: 1rem; }
+  /* Wide tables scroll inside themselves; the page never scrolls sideways. */
+  table.grid { display: block; max-width: 100%; overflow-x: auto; }
+  .feature-row { grid-template-columns: minmax(0, 1fr); gap: 0.3rem; }
+  .project-head { flex-wrap: wrap; }
+  .project-head .remote, .feature-row .sub { overflow-wrap: anywhere; white-space: normal; }
+  .gotosha { margin-left: 0; width: 100%; }
+  .gotosha input { flex: 1; min-width: 0; width: auto; }
   .strip { gap: 0; overflow: hidden; }
   .strip .cell { min-width: 1px; }
   .strip .file-break { width: 1px; margin: 0; }

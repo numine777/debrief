@@ -158,6 +158,23 @@ class ViewerSmokeTests(IsolatedTestCase):
         self.assertEqual(unexpected, [])
         self.assertEqual(requests, [])
 
+    def test_skip_link_moves_focus_without_leaving_the_page(self):
+        base = f"http://127.0.0.1:{self.port}/"
+        feature = f"#/p/{self.pid}/f/feat--ui"
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            page.goto(base + feature)
+            page.locator("main", has_text="Intent").wait_for()
+            page.keyboard.press("Tab")
+            self.assertEqual(page.locator(":focus").inner_text(), "Skip to content")
+            page.keyboard.press("Enter")
+            self.assertEqual(page.locator(":focus").get_attribute("id"), "main")
+            self.assertTrue(page.url.endswith(feature))
+            self.assertIn("Intent", page.inner_text("main"))  # it used to route to "That page doesn't exist"
+            browser.close()
+
+
 @unittest.skipIf(sync_playwright is None, "Playwright is not installed")
 class HubUiTests(IsolatedTestCase):
     def test_sign_in_then_browse(self):
