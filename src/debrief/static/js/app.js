@@ -61,8 +61,7 @@
   function showUser(meta) {
     if (!userSlot) return;
     clear(userSlot);
-    const search = document.querySelector(".searchbox");
-    if (search) search.hidden = meta.mode === "hub" && !meta.user;
+    for (const search of document.querySelectorAll(".searchbox, .search-link")) search.hidden = meta.mode === "hub" && !meta.user;
     if (meta.mode !== "hub" || !meta.user) return;
     userSlot.appendChild(h("span", { class: "small" }, meta.user.name));
     userSlot.appendChild(h("button", { class: "btn small", type: "button", onclick: async () => {
@@ -208,13 +207,16 @@
       evt.preventDefault();
       if (search.value.trim()) location.hash = `#/search?q=${encodeURIComponent(search.value.trim())}`;
     } }, D.icon("search"), search);
+    // Phones have no room for the search field (and no "/" key): they get a button to the search page.
+    // Touch screens have no keyboard to explain, so the shortcuts button is hidden there.
     const top = h("header", { class: "topbar" },
       h("a", { class: "wordmark", href: "#/" }, D.mark(), "Debrief"),
       crumbs, h("span", { class: "spacer" }),
       D.exported ? h("span", { class: "muted small" }, "Exported copy, read-only") : searchForm,
+      D.exported ? null : h("a", { class: "iconbtn search-link", href: "#/search", title: "Search", "aria-label": "Search" }, D.icon("search")),
       (userSlot = h("span", { class: "user-slot" })),
       h("button", { class: "iconbtn", type: "button", title: "Switch light and dark (t)", "aria-label": "Switch light and dark", onclick: toggleTheme }, D.icon("theme")),
-      h("button", { class: "iconbtn", type: "button", title: "Keyboard shortcuts (?)", "aria-label": "Keyboard shortcuts", onclick: showHelp }, D.icon("help")));
+      h("button", { class: "iconbtn help-btn", type: "button", title: "Keyboard shortcuts (?)", "aria-label": "Keyboard shortcuts", onclick: showHelp }, D.icon("help")));
     main = h("main", { id: "main", tabindex: "-1" });
     clear(app);
     // Not a hash link: the router owns the hash, and "#main" would be read as a page.

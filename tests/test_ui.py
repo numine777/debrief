@@ -282,6 +282,20 @@ class PhoneLayoutTests(IsolatedTestCase):
             self.assertLess(wide.locator(".tabs-bar").bounding_box()["y"], 0)
             self.assertEqual(page.errors + wide.errors, [])
 
+    def test_search_and_help_suit_the_screen(self):
+        with sync_playwright() as p:
+            page = self.open(p, self.feature, ".feature-head")
+            self.assertFalse(page.locator(".searchbox").is_visible())
+            self.assertFalse(page.locator(".help-btn").is_visible())
+            page.locator(".search-link").click()
+            page.locator(".search-page input[type=search]").wait_for()
+            self.assertTrue(page.url.endswith("#/search"))
+            wide = self.open(p, self.feature, ".feature-head", viewport={"width": 1280, "height": 800}, is_mobile=False, has_touch=False)
+            self.assertTrue(wide.locator(".searchbox").is_visible())
+            self.assertTrue(wide.locator(".help-btn").is_visible())
+            self.assertFalse(wide.locator(".search-link").is_visible())
+            self.assertEqual(page.errors + wide.errors, [])
+
 
 @unittest.skipIf(sync_playwright is None, "Playwright is not installed")
 class HubUiTests(IsolatedTestCase):

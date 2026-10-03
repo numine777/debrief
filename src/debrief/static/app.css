@@ -130,6 +130,10 @@ code, pre, .mono { font-family: var(--font-code); }
 }
 .iconbtn:hover { border-color: var(--rule-strong); color: var(--ink); }
 .iconbtn svg { width: 16px; height: 16px; }
+.search-link { display: none; }
+@media (hover: none) and (pointer: coarse) {
+  .help-btn { display: none; }
+}
 
 main { padding: 1.25rem var(--gutter) 4rem; max-width: 1500px; margin: 0 auto; }
 
@@ -598,6 +602,7 @@ kbd { font-family: var(--font-code); font-size: var(--s-12); border: 1px solid v
   .strip .cell { min-width: 1px; }
   .strip .file-break { width: 1px; margin: 0; }
   .crumbs, .searchbox { display: none; }
+  .search-link { display: inline-grid; }
   h1 { font-size: var(--s-24); }
   .card-body, .card-meta { margin-left: 0; }
   .tl li { grid-template-columns: minmax(0, 1fr); gap: 0.15rem; }
