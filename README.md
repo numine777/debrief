@@ -37,18 +37,24 @@ On a remote Linux host, forward the port: `ssh -L 7319:127.0.0.1:7319 host`.
    `~/.agents/skills`. The block tells the agent when to start a session, how to
    keep its journal, to run tests through the run ledger, to commit atomically,
    and to close out a leg only when you ask.
-2. **bin/session.** Agents call `~/.local/bin/debrief-session`:
-   `start`, `now` (journal time stamp, commit logging, your requests),
-   `run <cmd>` (records exit codes), `changed`, `close` and `publish`.
+2. **bin/session.** Agents call `~/.local/bin/debrief-session` (install writes
+   the actual path into the instructions): `start`, `now` (the journal time
+   stamp on stdout; logged commits and your requests on stderr), `run <cmd>`
+   (records exit codes and the uncommitted files it tested), `changed` (what
+   explains each changed hunk), `close` and `publish`.
 3. **Legs.** A feature is a branch; a leg is the work between two closeouts,
    which you trigger. At closeout the agent writes `brief.md`, `systems/*.md`,
    `tests.yaml` and `decisions/*.md` against the final code, and `publish`
    commits them to the project's archive repository.
 4. **Evidence.** Ingest checks the records against git: claim coverage of every
-   changed hunk, stale anchors, undeclared loops, retries, locks and external
-   calls, weakened tests, test claims against the run ledger, developer and
-   non-atomic commits, thin commit messages. Patches, commits and file versions
-   are archived, so a feature stays readable after its branch is gone.
+   changed hunk (an anchor must reach the changed lines, not just the diff's
+   context), stale and ambiguous anchors, undeclared loops, retries, locks and
+   external calls, weakened tests, test claims against the run ledger, developer
+   and non-atomic commits, thin commit messages. Commits merged in from the
+   default branch aren't the feature's, and amends and rebases don't
+   misattribute work. Patches, commits and file versions are archived, so a
+   feature stays readable after its branch is gone, and a host that lacks the
+   feature's commits keeps the archived evidence instead of replacing it.
 5. **The viewer.** Brief, system map, systems, tests, review queue, a diff in
    Story mode (commits in order, led by their messages) or Systems mode (hunks
    under each system's Change section), timeline, commit pages by SHA, search.
@@ -143,6 +149,13 @@ with the hub's host name in `allow_hosts`. Shared comments, replies, queued
 feedback and Close leg requests made on the hub flow back to the developer's
 host through the archive and reach the agent at its next `bin/session now`.
 Replace the self-signed certificate with one from your internal CA.
+
+Access: readers see projects and keep private review marks; reviewers also
+comment, reply, resolve and request closeouts; only a comment's author edits,
+shares or deletes it. Revoking a user's tokens (`debrief hub revoke <user>`)
+ends their signed-in sessions at once. Failed sign-ins are slowed and counted
+per address, but a valid token always works. Exports contain only the exported
+feature, never another project's records that share a commit or an epic.
 
 ## Where things live
 
