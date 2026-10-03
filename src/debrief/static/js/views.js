@@ -159,6 +159,7 @@
     clear(root);
     const tab = route.tab || "brief";
     root.appendChild(featureHeader(feature, tab, route));
+    root.appendChild(featureTabs(feature, tab));
     const body = h("div", { class: "feature-body" });
     root.appendChild(body);
     const views = {
@@ -174,6 +175,40 @@
     await fn(body, feature, route);
   }
 
+  // The views of a feature. On a phone the bar sticks to the top of the screen and scrolls
+  // sideways: the current view is brought into sight and a fade marks the side that hides more.
+  function featureTabs(feature, tab) {
+    const ev = feature.evidence || {};
+    const base = fpath(feature.project.project_id, feature.feature_id);
+    const queue = ev.queue || [];
+    const high = queue.filter((i) => i.severity === "high").length;
+    const counts = { queue: queue.length ? h("span", { class: ["count", high && "alert"] }, String(queue.length)) : null,
+      systems: h("span", { class: "count" }, String(feature.systems.length)),
+      tests: h("span", { class: "count" }, String(feature.tests.tests.length)) };
+    Object.assign(counts, D.extraTabCounts ? D.extraTabCounts(feature) : {});
+    const nav = h("nav", { class: "tabs", "aria-label": "Feature views", onscroll: () => tabEdges(bar) },
+      TABS.concat(D.extraTabs || []).map(([id, label]) =>
+        h("a", { href: id === "brief" ? base : `${base}/${id}`, "aria-current": (tab === id || (id === "systems" && tab === "system")) ? "page" : null },
+          label, counts[id] || null)));
+    const bar = h("div", { class: "tabs-bar" }, nav);
+    requestAnimationFrame(() => {
+      const current = nav.querySelector('[aria-current="page"]');
+      if (current && nav.scrollWidth > nav.clientWidth) {
+        const box = nav.getBoundingClientRect(), cur = current.getBoundingClientRect();
+        nav.scrollLeft += cur.left - box.left - (box.width - cur.width) / 2;
+      }
+      tabEdges(bar);
+    });
+    return bar;
+  }
+
+  function tabEdges(bar) {
+    const nav = bar.firstChild;
+    bar.classList.toggle("more-left", nav.scrollLeft > 2);
+    bar.classList.toggle("more-right", nav.scrollLeft + nav.clientWidth < nav.scrollWidth - 2);
+  }
+  window.addEventListener("resize", () => { const bar = document.querySelector(".tabs-bar"); if (bar) tabEdges(bar); });
+
   function featureHeader(feature, tab, route) {
     const ev = feature.evidence || {};
     const cov = ev.coverage || {};
@@ -182,15 +217,6 @@
       class: ["leg", !leg.closed_at && "open"], href: `${base}/timeline#leg-${leg.leg_id}`,
       title: leg.closed_at ? `Closed ${clock(leg.closed_at)}` : "Open: the developer closes it" },
       leg.leg_id.replace("leg-", "Leg "), leg.closed_at ? "" : " open")));
-    const queue = ev.queue || [];
-    const high = queue.filter((i) => i.severity === "high").length;
-    const counts = { queue: queue.length ? h("span", { class: ["count", high && "alert"] }, String(queue.length)) : null,
-      systems: h("span", { class: "count" }, String(feature.systems.length)),
-      tests: h("span", { class: "count" }, String(feature.tests.tests.length)) };
-    Object.assign(counts, D.extraTabCounts ? D.extraTabCounts(feature) : {});
-    const tabs = h("nav", { class: "tabs", "aria-label": "Feature views" }, TABS.concat(D.extraTabs || []).map(([id, label]) =>
-      h("a", { href: id === "brief" ? base : `${base}/${id}`, "aria-current": (tab === id || (id === "systems" && tab === "system")) ? "page" : null },
-        label, counts[id] || null)));
     const refresh = D.exported ? null : h("button", { class: "btn small", type: "button", title: "Recompute evidence from git now",
       onclick: async (evt) => {
         evt.currentTarget.disabled = true;
@@ -204,7 +230,8 @@
     const landed = (feature.landed || [])[0];
     const pickHunk = (u) => { location.hash = `${base}/diff?mode=systems&hunk=${u.id}`; };
     const unexplained = cov.unclaimed || 0;
-    return h("header", { class: "feature-head" },
+    // Off the Brief, a phone shows a compact header: title, strip, the total and what needs review.
+    return h("header", { class: ["feature-head", tab !== "brief" && "compact"] },
       h("h1", null, feature.title),
       h("div", { class: "facts" },
         feature.branch ? h("span", { class: "branch" }, feature.branch) : null,
@@ -220,11 +247,10 @@
         D.coverageStrip(ev.files || [], { onPick: pickHunk, reviewed: D.reviewedSet ? D.reviewedSet(feature) : null,
           label: `Coverage: ${pct(cov.ratio)} of ${cov.units || 0} changed hunks explained` }),
         h("div", { class: "legend" },
-          h("span", null, h("b", null, pct(cov.ratio)), `explained of ${plural(cov.units || 0, "changed hunk")}`),
+          h("span", { class: "legend-total" }, h("b", null, pct(cov.ratio)), `explained of ${plural(cov.units || 0, "changed hunk")}`),
           Array.from(D.coverageLegend(cov).childNodes),
           D.headerExtras ? D.headerExtras(feature) : null,
-          unexplained ? h("a", { href: `${base}/diff?mode=systems#unexplained` }, `Review ${plural(unexplained, "unexplained hunk")}`) : null)),
-      tabs);
+          unexplained ? h("a", { class: "legend-alert", href: `${base}/diff?mode=systems#unexplained` }, `Review ${plural(unexplained, "unexplained hunk")}`) : null)));
   }
 
   // --- brief --------------------------------------------------------------------------------------------

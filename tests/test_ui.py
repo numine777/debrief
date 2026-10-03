@@ -254,6 +254,34 @@ class PhoneLayoutTests(IsolatedTestCase):
             self.assertEqual(row.locator("td.ln > span:visible").count(), 2)
             self.assertEqual(page.errors + wide.errors, [])
 
+    def test_tabs_stay_in_reach(self):
+        with sync_playwright() as p:
+            page = self.open(p, self.feature + "/diff?mode=systems", ".hunk", viewport={"width": 390, "height": 480})
+            current = page.locator(".tabs a[aria-current=page]")
+            self.assertEqual(current.inner_text().strip(), "Diff")
+            page.wait_for_timeout(100)  # the bar scrolls the current view into sight after layout
+            box = current.bounding_box()
+            self.assertGreaterEqual(box["x"], 0)
+            self.assertLessEqual(box["x"] + box["width"], 390)
+            # Off the Brief the header is compact; the tab bar, not the top bar, stays on screen.
+            self.assertFalse(page.locator(".feature-head .facts").is_visible())
+            page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+            page.wait_for_timeout(100)
+            self.assertEqual(page.locator(".tabs-bar").bounding_box()["y"], 0)
+            self.assertLess(page.locator(".topbar").bounding_box()["y"], 0)
+            # The brief keeps the full header.
+            page.goto(self.base + self.feature)
+            page.locator("main", has_text="Intent").wait_for()
+            self.assertTrue(page.locator(".feature-head .facts").is_visible())
+            # Desktop keeps its sticky top bar and lets the tabs scroll away with the header.
+            wide = self.open(p, self.feature + "/diff?mode=systems", ".hunk", viewport={"width": 1280, "height": 480},
+                             is_mobile=False, has_touch=False)
+            wide.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+            wide.wait_for_timeout(100)
+            self.assertEqual(wide.locator(".topbar").bounding_box()["y"], 0)
+            self.assertLess(wide.locator(".tabs-bar").bounding_box()["y"], 0)
+            self.assertEqual(page.errors + wide.errors, [])
+
 
 @unittest.skipIf(sync_playwright is None, "Playwright is not installed")
 class HubUiTests(IsolatedTestCase):
