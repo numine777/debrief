@@ -29,6 +29,55 @@ debrief serve                        # http://127.0.0.1:7319
 
 On a remote Linux host, forward the port: `ssh -L 7319:127.0.0.1:7319 host`.
 
+## Nix and Home Manager
+
+The flake provides the package and a Home Manager module. Add it to your Home
+Manager flake's inputs, following your own nixpkgs and Home Manager:
+
+```nix
+debrief = {
+  url = "github:numine777/debrief";
+  inputs.nixpkgs.follows = "nixpkgs";
+  inputs.home-manager.follows = "home-manager";
+};
+```
+
+Then add `inputs.debrief.homeModules.default` to the configuration's `modules`
+and enable it:
+
+```nix
+programs.debrief = {
+  enable = true;
+  agents = [ "claude" "codex" ];   # any of claude, codex, devin, pi
+  claudeSettings = true;           # SessionStart hook and allow rules in Claude Code's settings.json
+  service.enable = true;           # `debrief serve --watch` as a systemd user unit or launchd agent
+  settings.residency.allow_hosts = [ "git.corp.example" ];   # becomes ~/.config/debrief/config
+};
+```
+
+This puts `debrief` and `debrief-session` on your PATH, and links
+`~/.local/bin/debrief-session` (the path the instructions give agents) and the
+skills in `~/.agents/skills` and Claude Code's skills directory from the Nix
+store. On every switch, activation runs `debrief install --managed` to keep
+Debrief's block in the listed agents' instruction files, and only there; the
+rest of each file stays yours. `claudeSettings` does the same for Claude Code's
+settings.
+
+- **Coming from `debrief install`:** the first switch runs `debrief uninstall`
+  to clear the old launchers, zipapp and skills that would block Home Manager's
+  links, keeping the archive. The module then installs its own.
+- **Instruction files Home Manager writes** are left alone. Include the block in
+  them, for example `programs.claude-code.context = config.programs.debrief.blockText;`.
+  If Home Manager writes Claude Code's settings, merge
+  `config.programs.debrief.claudeSettingsFragment` into `programs.claude-code.settings`
+  instead of setting `claudeSettings`. A moved `programs.claude-code.configDir`
+  is followed.
+- **Removing it:** run `debrief uninstall` before you disable the module. Home
+  Manager removes its links, but the blocks sit in your own files.
+
+`nix run github:numine777/debrief -- <command>` runs Debrief without installing
+it; `overlays.default` adds `pkgs.debrief`.
+
 ## How it works
 
 1. **The protocol.** `debrief install` adds a short always-on block to each
@@ -183,7 +232,12 @@ make test         # unit, integration and (with Playwright) browser tests
 make test-py39    # the suite on Python 3.9
 make build        # dist/debrief.pyz, reproducible
 make dogfood      # rebuild and reinstall the launchers from source
+nix flake check   # the package, the suite and the Home Manager module's activation
 ```
+
+`nix/e2e/run.sh` imports the flake into a Home Manager flake and activates it
+for the current user, as CI does on Linux and macOS. It rewrites your home
+directory, so run it only on a disposable machine.
 
 Debrief was built with its own protocol. Its records, legs and evidence live in
 a separate archive (never in this repository), delivered alongside it.
