@@ -152,6 +152,19 @@ class PackagedInstallTests(IsolatedTestCase):
         install.run_managed(["none"])
         self.assertNotIn("debrief:begin", (self.home / ".codex" / "AGENTS.md").read_text())
 
+    def test_claude_config_dir_moves_claudes_files(self):
+        alt = self.tmp / "claude-alt"
+        os.environ["CLAUDE_CONFIG_DIR"] = str(alt)
+        self.assertIn("claude", install.detect())
+        report = "\n".join(install.run_install(["claude", "devin"], claude_hooks=True))
+        self.assertIn(f"claude: added block in {alt / 'CLAUDE.md'}", report)
+        self.assertTrue((alt / "skills" / "ai-session").is_symlink())
+        self.assertIn("debrief-session context", (alt / "settings.json").read_text())
+        self.assertFalse((self.home / ".claude").exists())
+        # Devin reads ~/.claude/CLAUDE.md, not the moved file, so it keeps its own block.
+        self.assertIn("devin: added block", report)
+        self.assertIn("debrief:begin", (self.home / ".config" / "devin" / "AGENTS.md").read_text())
+
     def test_files_nix_manages_are_never_written(self):
         store = self.tmp / "store"
         os.environ["NIX_STORE_DIR"] = str(store)

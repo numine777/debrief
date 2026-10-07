@@ -10,7 +10,8 @@ Per host, never per project (goal G7). For every harness found it writes:
   zipapp kept in ``~/.local/share/debrief``.
 
 Devin also reads ``~/.claude/CLAUDE.md``, so when Claude Code is present too the
-block is written there once instead of twice.
+block is written there once instead of twice (unless ``CLAUDE_CONFIG_DIR`` moves
+Claude Code's file somewhere Devin does not look).
 """
 
 from __future__ import annotations
@@ -42,7 +43,8 @@ def shared_skills_dir() -> Path:
 
 
 def claude_dir() -> Path:
-    return home() / ".claude"
+    value = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(value).expanduser() if value else home() / ".claude"
 
 
 def codex_dir() -> Path:
@@ -68,6 +70,16 @@ def block_file(harness: str) -> Path:
     }[harness]
 
 
+def devin_reads_claude(chosen: List[str]) -> bool:
+    """Whether Devin gets the block from Claude Code's file instead of its own.
+
+    Devin reads ``~/.claude/CLAUDE.md``; a ``CLAUDE_CONFIG_DIR`` elsewhere means it
+    needs its own copy.
+    """
+    return ("devin" in chosen and "claude" in chosen
+            and block_file("claude") == home() / ".claude" / "CLAUDE.md")
+
+
 def detect() -> Dict[str, str]:
     """Harnesses that appear to be installed on this host, with the reason."""
     found: Dict[str, str] = {}
@@ -82,7 +94,7 @@ def detect() -> Dict[str, str]:
         else:
             if which("devin"):
                 found["devin"] = "devin is on PATH"
-    if claude_dir().exists():
+    if os.environ.get("CLAUDE_CONFIG_DIR") or claude_dir().exists():
         found["claude"] = f"found {claude_dir()}"
     elif which("claude"):
         found["claude"] = "claude is on PATH"
@@ -385,12 +397,12 @@ def run_install(harnesses: Optional[List[str]] = None, claude_hooks: bool = Fals
     for skill in SKILLS:
         report.append(install_skill(skill, shared, dry_run))
     block = render_block(shared)
-    devin_via_claude = "devin" in chosen and "claude" in chosen
+    devin_via_claude = devin_reads_claude(chosen)
     for harness in chosen:
         if harness == "devin" and devin_via_claude:
             if remove_block(block_file("devin"), dry_run):
                 report.append(f"removed the duplicate block from {_tilde(block_file('devin'))}")
-            report.append("devin: reads the block from ~/.claude/CLAUDE.md")
+            report.append(f"devin: reads the block from {_tilde(block_file('claude'))}")
             continue
         target = block_file(harness)
         if nix_managed(target):
@@ -421,7 +433,7 @@ def run_managed(harnesses: List[str], claude_hooks: bool = False, dry_run: bool 
     chosen = [h for h in harnesses if h != "none"]
     report: List[str] = []
     block = render_block(shared_skills_dir())
-    devin_via_claude = "devin" in chosen and "claude" in chosen
+    devin_via_claude = devin_reads_claude(chosen)
     for harness in HARNESSES:
         target = block_file(harness)
         wanted = harness in chosen and not (harness == "devin" and devin_via_claude)
@@ -436,7 +448,7 @@ def run_managed(harnesses: List[str], claude_hooks: bool = False, dry_run: bool 
         elif remove_block(target, dry_run):
             report.append(f"{harness}: removed block from {_tilde(target)}")
     if devin_via_claude:
-        report.append("devin: reads the block from ~/.claude/CLAUDE.md")
+        report.append(f"devin: reads the block from {_tilde(block_file('claude'))}")
     settings = claude_dir() / "settings.json"
     if claude_hooks and "claude" in chosen:
         report.extend(claude_settings(dry_run))
