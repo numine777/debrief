@@ -214,8 +214,8 @@ in
           has "$newGenPath/LaunchAgents/org.nix-community.home.debrief.plist" "debrief-serve"
         ''}
         before=$(cat .claude/CLAUDE.md .codex/AGENTS.md .claude/settings.json | sha256sum)
-        out=$(debrief 2>&1)
-        [[ -z $out ]] || fail "a second activation reported: $out"
+        report=$(debrief 2>&1)
+        [[ -z $report ]] || fail "a second activation reported: $report"
         [[ $(cat .claude/CLAUDE.md .codex/AGENTS.md .claude/settings.json | sha256sum) == "$before" ]] \
           || fail "a second activation changed files"
 
