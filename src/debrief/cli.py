@@ -26,12 +26,21 @@ def _print(lines: List[str]) -> None:
 def cmd_install(args) -> int:
     from . import install
 
+    if args.render:
+        _print(install.render_agent_files(Path(args.render)))
+        return 0
     harnesses = None if not args.harness else [h for part in args.harness for h in part.split(",") if h]
     if harnesses:
         unknown = [h for h in harnesses if h not in install.HARNESSES + ("none",)]
         if unknown:
             print(f"Unknown harness: {', '.join(unknown)}. Choose from {', '.join(install.HARNESSES)} or none.")
             return 2
+    if args.managed:
+        if not harnesses:
+            print("--managed needs --harness (--harness none removes every block).")
+            return 2
+        _print(install.run_managed(harnesses, claude_hooks=args.claude_settings, dry_run=args.dry_run))
+        return 0
     _print(install.run_install(harnesses, claude_hooks=args.claude_settings, dry_run=args.dry_run))
     return 0
 
@@ -156,6 +165,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="devin, claude, codex, pi or none (repeatable; default: detect)")
     p.add_argument("--claude-settings", action="store_true",
                    help="also add a SessionStart hook, archive access and allow rules to ~/.claude/settings.json")
+    p.add_argument("--managed", action="store_true",
+                   help="for packages that provide the launchers and skills (the home-manager module): keep only "
+                        "the instruction blocks, and with --claude-settings Claude Code's settings, in step with "
+                        "--harness, removing them elsewhere")
+    p.add_argument("--render", metavar="DIR",
+                   help="write the rendered instruction block and skills into DIR and change nothing else")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_install)
 

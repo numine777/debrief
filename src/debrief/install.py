@@ -122,6 +122,24 @@ def _tilde(path: Path) -> str:
         return str(path)
 
 
+def nix_managed(path: Path) -> bool:
+    """Whether ``path`` is a link into the Nix store, as home-manager installs files.
+
+    Such files belong to the user's Nix configuration: writing through or over the
+    link would either fail (the store is read-only) or break the next activation.
+    """
+    store = (os.environ.get("NIX_STORE_DIR") or "/nix/store").rstrip("/") + "/"
+    path = Path(path)
+    try:
+        return path.is_symlink() and os.path.realpath(path).startswith(store)
+    except OSError:
+        return False
+
+
+def _managed_note(path: Path) -> str:
+    return f"left {_tilde(path)} alone: Nix manages it"
+
+
 def _find_block(text: str):
     begin = BEGIN_RE.search(text)
     if not begin:
@@ -158,7 +176,7 @@ def upsert_block(path: Path, block: str, dry_run: bool = False) -> str:
 
 
 def remove_block(path: Path, dry_run: bool = False) -> bool:
-    if not path.exists():
+    if not path.exists() or nix_managed(path):
         return False
     text = path.read_text(encoding="utf-8")
     found = _find_block(text)
@@ -189,6 +207,8 @@ def _bundle_skill_files(skill: str) -> List[str]:
 def install_skill(skill: str, dest_root: Path, dry_run: bool = False) -> str:
     dest = dest_root / skill
     files = _bundle_skill_files(skill)
+    if nix_managed(dest):
+        return _managed_note(dest)
     if dest.is_symlink() or (dest.exists() and not dest.is_dir()):
         return f"skipped {dest}: not a directory Debrief manages"
     if dest.exists() and not (dest / MANIFEST).exists() and any(dest.iterdir()):
@@ -219,6 +239,8 @@ def install_skill(skill: str, dest_root: Path, dry_run: bool = False) -> str:
 
 def remove_skill(skill: str, dest_root: Path, dry_run: bool = False) -> Optional[str]:
     dest = dest_root / skill
+    if nix_managed(dest):
+        return None
     if dest.is_symlink():
         if not dry_run:
             dest.unlink()
@@ -233,6 +255,8 @@ def remove_skill(skill: str, dest_root: Path, dry_run: bool = False) -> Optional
 def link_skill(skill: str, link_root: Path, target_root: Path, dry_run: bool = False) -> str:
     link = link_root / skill
     target = target_root / skill
+    if nix_managed(link):
+        return _managed_note(link)
     if link.is_symlink():
         if Path(os.readlink(link)) == target:
             return f"unchanged link {link}"
@@ -263,12 +287,16 @@ def launcher_text(name: str, subcommand: str, pyz: Path) -> str:
 
 def install_tool(dry_run: bool = False) -> List[str]:
     pyz = paths.tool_home() / "debrief.pyz"
+    bindir = paths.user_bin_dir()
+    names = (("debrief", ""), ("debrief-session", "session"))
+    if any(nix_managed(bindir / name) for name, _ in names):
+        # A Nix package (the home-manager module) provides the launchers and the zipapp.
+        return [_managed_note(bindir / name) for name, _ in names if nix_managed(bindir / name)]
     actions = []
     if not dry_run:
         buildzip.install_copy(pyz)
     actions.append(f"installed {_tilde(pyz)}")
-    bindir = paths.user_bin_dir()
-    for name, sub in (("debrief", ""), ("debrief-session", "session")):
+    for name, sub in names:
         target = bindir / name
         text = launcher_text(name, sub, pyz)
         if target.exists() and target.read_text(encoding="utf-8", errors="replace") == text:
@@ -289,6 +317,8 @@ def install_tool(dry_run: bool = False) -> List[str]:
 def claude_settings(dry_run: bool = False, remove: bool = False) -> List[str]:
     """SessionStart hook, archive access and allow rules in ~/.claude/settings.json."""
     path = claude_dir() / "settings.json"
+    if nix_managed(path):
+        return [_managed_note(path) + "; add Debrief's hook and allow rules to that configuration"]
     try:
         data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     except ValueError:
@@ -363,6 +393,9 @@ def run_install(harnesses: Optional[List[str]] = None, claude_hooks: bool = Fals
             report.append("devin: reads the block from ~/.claude/CLAUDE.md")
             continue
         target = block_file(harness)
+        if nix_managed(target):
+            report.append(f"{harness}: {_managed_note(target)}; include the block there yourself")
+            continue
         action = upsert_block(target, block, dry_run)
         report.append(f"{harness}: {action} block in {_tilde(target)}")
         if harness == "codex" and target.exists() and target.stat().st_size > CODEX_LIMIT:
@@ -374,6 +407,60 @@ def run_install(harnesses: Optional[List[str]] = None, claude_hooks: bool = Fals
         report.extend(claude_settings(dry_run))
     report.append(f"Records go to {paths.archive_root()}. Track a repo with `debrief init <repo>`.")
     return report
+
+
+def run_managed(harnesses: List[str], claude_hooks: bool = False, dry_run: bool = False) -> List[str]:
+    """Install for a package that provides the launchers and skills itself.
+
+    The home-manager module installs ``debrief-session`` and the skills as Nix-managed
+    files and calls this on every activation. It keeps the instruction block in the
+    chosen harnesses' files and removes it from the others, and adds or removes
+    Claude Code's settings, so those files follow the configuration. Files that Nix
+    manages are left alone.
+    """
+    chosen = [h for h in harnesses if h != "none"]
+    report: List[str] = []
+    block = render_block(shared_skills_dir())
+    devin_via_claude = "devin" in chosen and "claude" in chosen
+    for harness in HARNESSES:
+        target = block_file(harness)
+        wanted = harness in chosen and not (harness == "devin" and devin_via_claude)
+        if nix_managed(target):
+            if wanted:
+                report.append(f"{harness}: {_managed_note(target)}; include programs.debrief.blockText there")
+            continue
+        if wanted:
+            report.append(f"{harness}: {upsert_block(target, block, dry_run)} block in {_tilde(target)}")
+            if harness == "codex" and target.exists() and target.stat().st_size > CODEX_LIMIT:
+                report.append(f"warning: {_tilde(target)} exceeds Codex's 32 KiB instruction limit")
+        elif remove_block(target, dry_run):
+            report.append(f"{harness}: removed block from {_tilde(target)}")
+    if devin_via_claude:
+        report.append("devin: reads the block from ~/.claude/CLAUDE.md")
+    settings = claude_dir() / "settings.json"
+    if claude_hooks and "claude" in chosen:
+        report.extend(claude_settings(dry_run))
+    elif settings.exists() and "debrief-session" in settings.read_text(encoding="utf-8", errors="replace"):
+        report.extend(claude_settings(dry_run, remove=True))
+    return report
+
+
+def render_agent_files(dest: Path) -> List[str]:
+    """Write the instruction block and skills, rendered for this host's paths, into ``dest``.
+
+    For packages that install them themselves: ``dest/block.md`` and
+    ``dest/skills/<skill>/``. Nothing else is touched.
+    """
+    dest = Path(dest)
+    shared = shared_skills_dir()
+    util.write_text(dest / "block.md", render_block(shared))
+    for skill in SKILLS:
+        for rel in _bundle_skill_files(skill):
+            data = resources.read_bytes(f"bundle/skills/{skill}/{rel}")
+            if rel.endswith(".md"):
+                data = render_text(data.decode("utf-8"), shared).encode("utf-8")
+            util.write_bytes(dest / "skills" / skill / rel, data)
+    return [f"rendered the block and skills into {dest} for {session_launcher_text()} and {_tilde(shared)}"]
 
 
 def run_uninstall(dry_run: bool = False) -> List[str]:
