@@ -152,6 +152,25 @@ class PackagedInstallTests(IsolatedTestCase):
         install.run_managed(["none"])
         self.assertNotIn("debrief:begin", (self.home / ".codex" / "AGENTS.md").read_text())
 
+    def test_quiet_managed_install_reports_only_changes(self):
+        report = install.run_managed(["claude", "codex"], claude_hooks=True, quiet=True)
+        self.assertEqual(len(report), 3, report)
+        self.assertIn("claude: added block in ~/.claude/CLAUDE.md", report)
+        self.assertEqual(install.run_managed(["claude", "codex"], claude_hooks=True, quiet=True), [])
+        # Settings are compared as data: Claude Code's own formatting is not rewritten.
+        settings = self.home / ".claude" / "settings.json"
+        compact = json.dumps(json.loads(settings.read_text()), separators=(",", ":"))
+        settings.write_text(compact)
+        self.assertIn("unchanged ~/.claude/settings.json",
+                      install.run_managed(["claude", "codex"], claude_hooks=True))
+        self.assertEqual(settings.read_text(), compact)
+        self.assertEqual(install.run_managed(["codex"], quiet=True),
+                         ["claude: removed block from ~/.claude/CLAUDE.md",
+                          "removed Debrief entries from ~/.claude/settings.json (SessionStart hook, archive "
+                          "directory, allow rules)"])
+        self.run_cli("install", "--quiet", "--harness", "codex")
+        self.assertEqual(self.last_code, 2)
+
     def test_claude_config_dir_moves_claudes_files(self):
         alt = self.tmp / "claude-alt"
         os.environ["CLAUDE_CONFIG_DIR"] = str(alt)
@@ -165,10 +184,29 @@ class PackagedInstallTests(IsolatedTestCase):
         self.assertIn("devin: added block", report)
         self.assertIn("debrief:begin", (self.home / ".config" / "devin" / "AGENTS.md").read_text())
 
+    def test_nix_managed_instructions_that_carry_the_block_pass(self):
+        store = self.tmp / "store"
+        os.environ["NIX_STORE_DIR"] = str(store)
+        self.write(store / "claude.md", "declared rules\n\n" + install.render_block())
+        self.write(store / "agents.md", install.render_block().replace(
+            f"debrief:begin v{install.BUNDLE_VERSION}", "debrief:begin v0"))
+        self.write(store / "settings.json", json.dumps({"hooks": {"SessionStart": [
+            {"hooks": [{"type": "command", "command": "/h/.local/bin/debrief-session context"}]}]}}))
+        for link, target in ((self.home / ".claude" / "CLAUDE.md", "claude.md"),
+                             (self.home / ".codex" / "AGENTS.md", "agents.md"),
+                             (self.home / ".claude" / "settings.json", "settings.json")):
+            link.parent.mkdir(parents=True, exist_ok=True)
+            os.symlink(store / target, link)
+        self.assertEqual(install.run_managed(["claude", "codex"], claude_hooks=True, quiet=True),
+                         ["codex: ~/.codex/AGENTS.md comes from Nix and has an outdated block; "
+                          "include programs.debrief.blockText in it"])
+        report = install.run_managed(["claude", "codex"], claude_hooks=True)
+        self.assertIn("claude: ~/.claude/CLAUDE.md comes from Nix and has the block", report)
+        self.assertIn("claude: ~/.claude/settings.json comes from Nix and has Debrief's entries", report)
+
     def test_files_nix_manages_are_never_written(self):
         store = self.tmp / "store"
         os.environ["NIX_STORE_DIR"] = str(store)
-        self.addCleanup(os.environ.pop, "NIX_STORE_DIR", None)
         links = {
             self.home / ".claude" / "CLAUDE.md": store / "claude.md",
             self.home / ".claude" / "settings.json": store / "settings.json",
@@ -184,7 +222,8 @@ class PackagedInstallTests(IsolatedTestCase):
             link.parent.mkdir(parents=True, exist_ok=True)
             os.symlink(target, link)
         report = "\n".join(install.run_managed(["claude"], claude_hooks=True))
-        self.assertIn("include programs.debrief.blockText there", report)
+        self.assertIn("has no block; include programs.debrief.blockText in it", report)
+        self.assertIn("merge programs.debrief.claudeCodeSettings into programs.claude-code.settings", report)
         report += "\n".join(install.run_install(["claude"], claude_hooks=True))
         self.assertIn("Nix manages it", report)
         self.assertFalse((self.tmp / "tool" / "debrief.pyz").exists())

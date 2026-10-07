@@ -337,6 +337,7 @@ def claude_settings(dry_run: bool = False, remove: bool = False) -> List[str]:
         return [f"skipped {path}: not valid JSON"]
     if not isinstance(data, dict):
         return [f"skipped {path}: not a JSON object"]
+    before = json.dumps(data, sort_keys=True)
     session_cmd = str(paths.user_bin_dir() / "debrief-session")
     hooks = data.setdefault("hooks", {})
     starts = [h for h in hooks.get("SessionStart", []) if not _is_debrief_hook(h)]
@@ -366,6 +367,9 @@ def claude_settings(dry_run: bool = False, remove: bool = False) -> List[str]:
             perms.pop(key, None)
     if not perms:
         data.pop("permissions", None)
+    if json.dumps(data, sort_keys=True) == before:
+        # Compared as data, so a file Claude Code formatted its own way is not rewritten.
+        return [f"unchanged {_tilde(path)}"]
     if not dry_run:
         util.write_text(path, json.dumps(data, indent=2) + "\n")
     verb = "removed Debrief entries from" if remove else "updated"
@@ -421,14 +425,23 @@ def run_install(harnesses: Optional[List[str]] = None, claude_hooks: bool = Fals
     return report
 
 
-def run_managed(harnesses: List[str], claude_hooks: bool = False, dry_run: bool = False) -> List[str]:
+def _read(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def run_managed(harnesses: List[str], claude_hooks: bool = False, dry_run: bool = False,
+                quiet: bool = False) -> List[str]:
     """Install for a package that provides the launchers and skills itself.
 
     The home-manager module installs ``debrief-session`` and the skills as Nix-managed
     files and calls this on every activation. It keeps the instruction block in the
     chosen harnesses' files and removes it from the others, and adds or removes
     Claude Code's settings, so those files follow the configuration. Files that Nix
-    manages are left alone.
+    manages are never written; the report says when one lacks the current block.
+    With ``quiet``, only changes and problems are reported.
     """
     chosen = [h for h in harnesses if h != "none"]
     report: List[str] = []
@@ -439,20 +452,36 @@ def run_managed(harnesses: List[str], claude_hooks: bool = False, dry_run: bool 
         wanted = harness in chosen and not (harness == "devin" and devin_via_claude)
         if nix_managed(target):
             if wanted:
-                report.append(f"{harness}: {_managed_note(target)}; include programs.debrief.blockText there")
+                text = _read(target)
+                found = _find_block(text)
+                if found and text[found[0]:found[1]] == block:
+                    if not quiet:
+                        report.append(f"{harness}: {_tilde(target)} comes from Nix and has the block")
+                else:
+                    state = "an outdated block" if found else "no block"
+                    report.append(f"{harness}: {_tilde(target)} comes from Nix and has {state}; "
+                                  "include programs.debrief.blockText in it")
             continue
         if wanted:
-            report.append(f"{harness}: {upsert_block(target, block, dry_run)} block in {_tilde(target)}")
+            action = upsert_block(target, block, dry_run)
+            if action != "unchanged" or not quiet:
+                report.append(f"{harness}: {action} block in {_tilde(target)}")
             if harness == "codex" and target.exists() and target.stat().st_size > CODEX_LIMIT:
                 report.append(f"warning: {_tilde(target)} exceeds Codex's 32 KiB instruction limit")
         elif remove_block(target, dry_run):
             report.append(f"{harness}: removed block from {_tilde(target)}")
-    if devin_via_claude:
+    if devin_via_claude and not quiet:
         report.append(f"devin: reads the block from {_tilde(block_file('claude'))}")
     settings = claude_dir() / "settings.json"
     if claude_hooks and "claude" in chosen:
-        report.extend(claude_settings(dry_run))
-    elif settings.exists() and "debrief-session" in settings.read_text(encoding="utf-8", errors="replace"):
+        if not nix_managed(settings):
+            report.extend(line for line in claude_settings(dry_run) if not (quiet and line.startswith("unchanged")))
+        elif "debrief-session" not in _read(settings):
+            report.append(f"claude: {_tilde(settings)} comes from Nix; merge programs.debrief.claudeCodeSettings "
+                          "into programs.claude-code.settings")
+        elif not quiet:
+            report.append(f"claude: {_tilde(settings)} comes from Nix and has Debrief's entries")
+    elif not nix_managed(settings) and "debrief-session" in _read(settings):
         report.extend(claude_settings(dry_run, remove=True))
     return report
 

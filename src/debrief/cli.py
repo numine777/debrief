@@ -39,8 +39,12 @@ def cmd_install(args) -> int:
         if not harnesses:
             print("--managed needs --harness (--harness none removes every block).")
             return 2
-        _print(install.run_managed(harnesses, claude_hooks=args.claude_settings, dry_run=args.dry_run))
+        _print(install.run_managed(harnesses, claude_hooks=args.claude_settings, dry_run=args.dry_run,
+                                   quiet=args.quiet))
         return 0
+    if args.quiet:
+        print("--quiet works with --managed.")
+        return 2
     _print(install.run_install(harnesses, claude_hooks=args.claude_settings, dry_run=args.dry_run))
     return 0
 
@@ -171,6 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "--harness, removing them elsewhere")
     p.add_argument("--render", metavar="DIR",
                    help="write the rendered instruction block and skills into DIR and change nothing else")
+    p.add_argument("--quiet", action="store_true", help="with --managed: report only changes and problems")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_install)
 
