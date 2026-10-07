@@ -37,6 +37,10 @@ class ResidencyTests(IsolatedTestCase):
             residency.check_url("https://api.example.com/v1", "Compaction endpoint", cfg)
         self.assertIn("api.example.com is not on the residency allowlist", str(ctx.exception))
 
+    def test_config_values_are_literal(self):
+        self.write(self.tmp / "config" / "config", "[provider.x]\nbase_url = https://m.example/v1?a=%20b  # note\n")
+        self.assertEqual(config.load().get("provider.x", "base_url"), "https://m.example/v1?a=%20b")
+
     def test_cloud_synced_archive_is_refused(self):
         for path in ["/Users/me/Library/Mobile Documents/com~apple~CloudDocs/a",
                      "/Users/me/Library/CloudStorage/OneDrive-Corp/a", "/home/me/Dropbox/a",

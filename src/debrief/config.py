@@ -84,7 +84,8 @@ class Config:
 
 def load(path: Optional[Path] = None) -> Config:
     path = Path(path) if path else paths.config_file()
-    parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+    # Values are literal: no %-interpolation, so URLs with escapes like %20 read as written.
+    parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"), interpolation=None)
     if path.exists():
         parser.read(path, encoding="utf-8")
     return Config(parser, path)
