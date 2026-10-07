@@ -28,6 +28,8 @@ jobs:
           if [ -n "$(git status --porcelain -- flake.lock)" ]; then
             echo "flake.lock is missing or incomplete; locked:"
             cat flake.lock
+            # Also on the summary page, to copy into the repository.
+            python3 -c 'import sys; print("::notice title=flake.lock::" + sys.stdin.read().replace("%", "%25").replace("\n", "%0A"))' < flake.lock
           fi
       - name: Evaluate every system
         run: nix flake check --no-build --all-systems
