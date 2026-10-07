@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -239,8 +240,10 @@ class SyncAndServiceTests(IsolatedTestCase):
         self.assertIn("not on the residency allowlist", out)
 
     def test_service_files(self):
+        self.assertIn("serve --watch", service.systemd_unit())
+        self.assertIn("<string>serve</string><string>--watch</string>", service.launchd_plist())
         path, text, start, stop = service.target()
-        self.assertIn("serve --watch", text)
+        self.assertEqual(text, service.launchd_plist() if sys.platform == "darwin" else service.systemd_unit())
         out = self.run_cli("service", "print")
         self.assertIn("serve", out)
 
