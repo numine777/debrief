@@ -222,9 +222,9 @@ def install_skill(skill: str, dest_root: Path, dry_run: bool = False) -> str:
     if nix_managed(dest):
         return _managed_note(dest)
     if dest.is_symlink() or (dest.exists() and not dest.is_dir()):
-        return f"skipped {dest}: not a directory Debrief manages"
+        return f"skipped {_tilde(dest)}: not a directory Debrief manages"
     if dest.exists() and not (dest / MANIFEST).exists() and any(dest.iterdir()):
-        return f"skipped {dest}: exists and was not installed by Debrief"
+        return f"skipped {_tilde(dest)}: exists and was not installed by Debrief"
     old = set()
     if (dest / MANIFEST).exists():
         old = set((dest / MANIFEST).read_text(encoding="utf-8").split())
@@ -246,7 +246,7 @@ def install_skill(skill: str, dest_root: Path, dry_run: bool = False) -> str:
                 stale.unlink()
     if not dry_run:
         util.write_text(dest / MANIFEST, "\n".join(files) + "\n")
-    return ("installed" if changed else "unchanged") + f" {dest}"
+    return ("installed" if changed else "unchanged") + f" {_tilde(dest)}"
 
 
 def remove_skill(skill: str, dest_root: Path, dry_run: bool = False) -> Optional[str]:
@@ -256,11 +256,11 @@ def remove_skill(skill: str, dest_root: Path, dry_run: bool = False) -> Optional
     if dest.is_symlink():
         if not dry_run:
             dest.unlink()
-        return f"removed link {dest}"
+        return f"removed link {_tilde(dest)}"
     if (dest / MANIFEST).exists():
         if not dry_run:
             shutil.rmtree(dest)
-        return f"removed {dest}"
+        return f"removed {_tilde(dest)}"
     return None
 
 
@@ -271,7 +271,7 @@ def link_skill(skill: str, link_root: Path, target_root: Path, dry_run: bool = F
         return _managed_note(link)
     if link.is_symlink():
         if Path(os.readlink(link)) == target:
-            return f"unchanged link {link}"
+            return f"unchanged link {_tilde(link)}"
         if not dry_run:
             link.unlink()
     elif link.exists():
@@ -279,11 +279,11 @@ def link_skill(skill: str, link_root: Path, target_root: Path, dry_run: bool = F
             if not dry_run:
                 shutil.rmtree(link)
         else:
-            return f"skipped {link}: exists and was not installed by Debrief"
+            return f"skipped {_tilde(link)}: exists and was not installed by Debrief"
     if not dry_run:
         link_root.mkdir(parents=True, exist_ok=True)
         os.symlink(target, link)
-    return f"linked {link} -> {_tilde(target)}"
+    return f"linked {_tilde(link)} -> {_tilde(target)}"
 
 
 # --- launchers -----------------------------------------------------------------------
