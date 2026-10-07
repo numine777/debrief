@@ -27,6 +27,14 @@ in_store() { [[ $(readlink -f "$1") == /nix/store/* ]] || fail "$1 is not linked
 # What one activation step printed, from a captured activation.
 step_output() { awk -v step="$1" '/^Activating /{p = ($2 == step); next} p' <<<"$2"; }
 records() { cat .claude/CLAUDE.md .codex/AGENTS.md .claude/settings.json; }
+# On GitHub Actions, a line for the run's summary page.
+notice() {
+  if [[ ${GITHUB_ACTIONS:-} == true ]]; then
+    local text=${2//'%'/'%25'}
+    text=${text//$'\n'/'%0A'}
+    echo "::notice title=$1::$text"
+  fi
+}
 
 cd "$HOME"
 
@@ -39,8 +47,14 @@ echo "::endgroup::"
 
 echo "::group::Activate the configuration with Claude Code and Codex"
 nix build "$flake#homeConfigurations.full.activationPackage" -o "$work/full"
-"$work/full/activate"
+out=$("$work/full/activate" 2>&1) || {
+  echo "$out"
+  fail "activation failed"
+}
+echo "$out"
 echo "::endgroup::"
+notice "First activation" "$(step_output debriefMigrate "$out")
+$(step_output debrief "$out")"
 [[ ! -e .local/share/debrief/debrief.pyz && ! -e .local/bin/debrief ]] || fail "the manual install was left behind"
 for f in .local/bin/debrief-session .agents/skills/ai-session .agents/skills/ai-session-closeout \
   .claude/skills/ai-session .claude/skills/ai-session-closeout; do
@@ -68,7 +82,9 @@ echo "::endgroup::"
 echo "::group::The viewer service (informational)"
 if curl -sf --retry 10 --retry-delay 2 --retry-all-errors -o /dev/null http://127.0.0.1:7319/; then
   echo "the service answers on 127.0.0.1:7319"
+  notice "Viewer service" "answers on 127.0.0.1:7319"
 else
+  notice "Viewer service" "did not answer on this runner"
   echo "the service did not answer (no user service manager on this runner?)"
   if [[ $(uname) == Darwin ]]; then
     launchctl print "gui/$(id -u)/org.nix-community.home.debrief" 2>&1 | head -n 20 || true

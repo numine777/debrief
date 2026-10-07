@@ -32,7 +32,12 @@ jobs:
       - name: Evaluate every system
         run: nix flake check --no-build --all-systems
       - name: Build and run the checks
-        run: nix flake check --print-build-logs
+        run: |
+          set -o pipefail
+          nix flake check --print-build-logs --keep-going 2>&1 | tee "$RUNNER_TEMP/check.log"
+      - name: Annotate the failure
+        if: failure()
+        run: .github/annotate-log-tail.sh "$RUNNER_TEMP/check.log" "nix flake check"
       - name: Run the app
         run: nix run . -- --version
 
@@ -64,4 +69,9 @@ jobs:
         env:
           NIXPKGS: ${{ matrix.nixpkgs }}
           HOME_MANAGER: ${{ matrix.home-manager }}
-        run: nix/e2e/run.sh
+        run: |
+          set -o pipefail
+          nix/e2e/run.sh 2>&1 | tee "$RUNNER_TEMP/e2e.log"
+      - name: Annotate the failure
+        if: failure()
+        run: .github/annotate-log-tail.sh "$RUNNER_TEMP/e2e.log" "home-manager end-to-end"
