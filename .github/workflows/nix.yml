@@ -1,0 +1,67 @@
+name: Nix
+
+on:
+  push:
+    branches: [master, "ci/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  flake:
+    name: flake check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@v31
+      - name: Lock inputs
+        run: |
+          nix flake lock
+          if [ -n "$(git status --porcelain -- flake.lock)" ]; then
+            echo "flake.lock is missing or incomplete; locked:"
+            cat flake.lock
+          fi
+      - name: Evaluate every system
+        run: nix flake check --no-build --all-systems
+      - name: Build and run the checks
+        run: nix flake check --print-build-logs
+      - name: Run the app
+        run: nix run . -- --version
+
+  home-manager:
+    name: home-manager (${{ matrix.os }}, ${{ matrix.channel }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            channel: "26.05"
+            nixpkgs: github:NixOS/nixpkgs/nixos-26.05
+            home-manager: github:nix-community/home-manager/release-26.05
+          - os: macos-latest
+            channel: "26.05"
+            nixpkgs: github:NixOS/nixpkgs/nixpkgs-26.05-darwin
+            home-manager: github:nix-community/home-manager/release-26.05
+          - os: ubuntu-latest
+            channel: unstable
+            nixpkgs: github:NixOS/nixpkgs/nixos-unstable
+            home-manager: github:nix-community/home-manager
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@v31
+      - name: Import the flake into a Home Manager flake and activate it
+        env:
+          NIXPKGS: ${{ matrix.nixpkgs }}
+          HOME_MANAGER: ${{ matrix.home-manager }}
+        run: nix/e2e/run.sh

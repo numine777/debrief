@@ -1,0 +1,58 @@
+# A Home Manager configuration that imports Debrief the way the README shows.
+# nix/e2e/run.sh fills in the @...@ placeholders.
+{
+  inputs = {
+    nixpkgs.url = "@NIXPKGS@";
+    home-manager = {
+      url = "@HOME_MANAGER@";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    debrief = {
+      url = "@DEBRIEF@";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.home-manager.follows = "home-manager";
+    };
+  };
+
+  outputs =
+    {
+      nixpkgs,
+      home-manager,
+      debrief,
+      ...
+    }:
+    let
+      home =
+        programs:
+        home-manager.lib.homeManagerConfiguration {
+          pkgs = nixpkgs.legacyPackages."@SYSTEM@";
+          modules = [
+            debrief.homeModules.default
+            {
+              home = {
+                username = "@USER@";
+                homeDirectory = "@HOME@";
+                stateVersion = "26.05";
+              };
+              programs.debrief = {
+                enable = true;
+              }
+              // programs;
+            }
+          ];
+        };
+    in
+    {
+      homeConfigurations = {
+        full = home {
+          agents = [
+            "claude"
+            "codex"
+          ];
+          claudeSettings = true;
+          service.enable = true;
+        };
+        codex = home { agents = [ "codex" ]; };
+      };
+    };
+}
